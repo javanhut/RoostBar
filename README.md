@@ -68,26 +68,26 @@ bar's icon connects/disconnects with a click.
 ## Build & install
 
 ```
-./install.sh            # on Raven Linux: `sudo rvn install -y` the audio/BT packages,
+./scripts/install.sh            # on Raven Linux: `sudo rvn install -y` the audio/BT packages,
                         # register bluetoothd; then build, copy to ~/.local/bin, seed config
 roostbar &              # run now
 ```
 
-`install.sh` reads `/etc/os-release`; when `ID=raven` it installs
+`scripts/install.sh` reads `/etc/os-release`; when `ID=raven` it installs
 `pipewire-audio wireplumber pipewire-pulse bluez` with `sudo rvn install -y`
 and drops `contrib/bluetoothd.toml` into `/etc/raven/init.d`. On anything
 else it just tells you what to install.
 
-`install.sh` prints the one `sudo sed` line that adds the bar to
+`scripts/install.sh` prints the one `sudo sed` line that adds the bar to
 `/usr/bin/raven-wayland-session`, the only place a Huginn session starts
 programs from.
 
 Uninstall:
 
 ```
-./uninstall.sh              # stop the bar, remove the binary and the autostart line
-./uninstall.sh --purge      # also delete ~/.config/roostbar
-./uninstall.sh --packages   # also `sudo rvn uninstall -y` the packages install.sh added
+./scripts/uninstall.sh              # stop the bar, remove the binary and the autostart line
+./scripts/uninstall.sh --purge      # also delete ~/.config/roostbar
+./scripts/uninstall.sh --packages   # also `sudo rvn uninstall -y` the packages install.sh added
                             # and unregister bluetoothd (Raven Linux only)
 ```
 

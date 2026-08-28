@@ -3,7 +3,7 @@
 # Bluetooth stacks it drives when the OS is Raven Linux, and print the
 # autostart line.
 set -eu
-cd "$(dirname "$0")"
+cd "$(dirname "$0")/.."   # repo root, whether the script lives in ./ or ./scripts/
 
 # --- which OS is this? ---------------------------------------------------
 OS_ID=""
