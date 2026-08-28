@@ -8,6 +8,17 @@
 #                               added and the bluetoothd init drop-in (Raven only)
 set -eu
 
+# Run as the user, not root: cargo, ~/.local/bin and ~/.config are all per-user,
+# and the few root steps below call sudo themselves. `sudo ./install.sh` (or
+# `sudo imlazy install`) is re-executed as the invoking user.
+if [ "$(id -u)" = 0 ]; then
+    if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != root ]; then
+        exec sudo -u "$SUDO_USER" -H -- "$0" "$@"
+    fi
+    echo "run this as your normal user, not root" >&2
+    exit 1
+fi
+
 PURGE=0; PACKAGES=0
 for a in "$@"; do
     case "$a" in
