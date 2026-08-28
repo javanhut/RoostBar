@@ -1,0 +1,20 @@
+# bluetoothd -- BlueZ, managed by raven-init.
+#
+#   sudo rvn install -y bluez
+#   sudo cp contrib/bluetoothd.toml /etc/raven/init.d/
+#   sudo raven-rc reload && sudo raven-rc start bluetoothd
+#
+# It talks on the system D-Bus, which init already starts, and RoostBar reads
+# and drives it over org.bluez. Pairing a new device is still bluetoothctl's
+# job (`bluetoothctl` -> `scan on`, `pair XX:..`, `trust XX:..`); after that a
+# click on the bar's Bluetooth icon connects or disconnects it.
+
+[[services]]
+name = "bluetoothd"
+description = "Bluetooth daemon (BlueZ)"
+exec = "/usr/lib/bluetooth/bluetoothd"
+args = []
+after = ["dbus"]
+restart = true
+enabled = true
+critical = false
