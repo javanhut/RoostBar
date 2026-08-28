@@ -1,0 +1,6 @@
+#!/bin/sh
+# Start RoostBar for this session. Installed by scripts/install.sh into
+# ~/.config/raven/session.d/, run by raven-wayland-session once the compositor
+# is up. The bar itself waits for the compositor socket too, so it's robust to
+# being started early.
+exec "${HOME}/.local/bin/roostbar"

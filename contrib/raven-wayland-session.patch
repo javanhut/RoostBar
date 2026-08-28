@@ -1,0 +1,46 @@
+--- /usr/bin/raven-wayland-session.orig	2026-08-28 12:03:27.056694799 +0000
++++ /usr/bin/raven-wayland-session	2026-08-28 12:03:27.069854492 +0000
+@@ -128,4 +128,43 @@
+     /usr/bin/ravencanvasd &
+ fi
+ # <<< ravencanvas <<<
++# >>> session.d >>>
++# Per-user session programs: the equivalent of a user service manager on a
++# system that has none. Anything executable in
++#
++#     /etc/raven/session.d/            machine-wide
++#     ~/.config/raven/session.d/       this user; a file of the same name
++#                                      overrides (or, if not executable, masks)
++#                                      the machine-wide one
++#
++# is started in the background once the compositor has bound its socket, with
++# WAYLAND_DISPLAY set, as the session user. Each runs detached in its own
++# process group, so a program that hangs or exits does not affect the others
++# or the session. Files are run in name order; use a numeric prefix.
++#
++# Waiting happens in a background subshell because the compositor is exec'd
++# below and nothing in this script survives that.
++(
++    i=0
++    while [ $i -lt 150 ]; do
++        for s in "${XDG_RUNTIME_DIR}"/wayland-*; do
++            case "$s" in *.lock) continue ;; esac
++            [ -S "$s" ] && { WAYLAND_DISPLAY="$(basename "$s")"; export WAYLAND_DISPLAY; break 2; }
++        done
++        i=$((i + 1))
++        sleep 0.1
++    done
++    [ -n "${WAYLAND_DISPLAY:-}" ] || exit 0
++    user_d="${XDG_CONFIG_HOME:-$HOME/.config}/raven/session.d"
++    for f in /etc/raven/session.d/* "$user_d"/*; do
++        [ -e "$f" ] || continue
++        name="$(basename "$f")"
++        # A user file with the same name takes precedence over the system one.
++        case "$f" in /etc/raven/session.d/*) [ -e "$user_d/$name" ] && continue ;; esac
++        [ -x "$f" ] || continue
++        setsid "$f" </dev/null >/dev/null 2>&1 &
++    done
++) &
++# <<< session.d <<<
++
+ exec "${COMPOSITOR}" --backend udev

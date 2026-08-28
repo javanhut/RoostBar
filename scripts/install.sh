@@ -55,15 +55,39 @@ mkdir -p "$HOME/.local/bin" "$HOME/.config/roostbar"
 install -m755 target/release/roostbar "$HOME/.local/bin/roostbar"
 [ -e "$HOME/.config/roostbar/config.toml" ] || cp config.example.toml "$HOME/.config/roostbar/config.toml"
 
+# --- per-session autostart ---------------------------------------------
+# The bar is a per-user Wayland client, so it belongs in the session, not in
+# raven-init. raven-wayland-session gets a session.d mechanism (see
+# contrib/raven-wayland-session.patch) and the bar a drop-in in the user's
+# session.d. Applying the patch is the one root step; it is skipped once the
+# marker is present.
+SESSION=/usr/bin/raven-wayland-session
+if [ -r "$SESSION" ] && ! grep -q '>>> session.d >>>' "$SESSION"; then
+    echo "adding session.d support to $SESSION (needs sudo)"
+    sudo cp "$SESSION" "$SESSION.orig"
+    sudo patch -s "$SESSION" contrib/raven-wayland-session.patch
+    sudo sh -n "$SESSION"
+fi
+# Undo the older single-line autostart if it was ever added.
+if [ -r "$SESSION" ] && grep -q 'local/bin/roostbar' "$SESSION"; then
+    sudo sed -i '/local\/bin\/roostbar/d' "$SESSION"
+fi
+SESSION_D="${XDG_CONFIG_HOME:-$HOME/.config}/raven/session.d"
+mkdir -p "$SESSION_D"
+install -m755 contrib/session.d/50-roostbar "$SESSION_D/50-roostbar"
+
+if ! pgrep -x roostbar >/dev/null 2>&1; then
+    setsid "$HOME/.local/bin/roostbar" </dev/null >/dev/null 2>&1 &
+    echo "started roostbar"
+fi
+
 cat <<MSG
 
-Installed ~/.local/bin/roostbar and ~/.config/roostbar/config.toml.
+Installed:
+  ~/.local/bin/roostbar
+  ~/.config/roostbar/config.toml
+  $SESSION_D/50-roostbar        (starts the bar at every login)
 
-Run it now:        roostbar &
-
-Autostart: Huginn has no autostart hook, and the session script is system
-owned. Add one line before the final \`exec "\${COMPOSITOR}"\` in
-/usr/bin/raven-wayland-session:
-
-    sudo sed -i 's|^exec "\${COMPOSITOR}" --backend udev|[ -x "\$HOME/.local/bin/roostbar" ] \&\& (sleep 1; "\$HOME/.local/bin/roostbar") \&\n&|' /usr/bin/raven-wayland-session
+Anything executable you drop into $SESSION_D
+starts with your session the same way.
 MSG

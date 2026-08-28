@@ -43,7 +43,14 @@ if [ -e "$HOME/.local/bin/roostbar" ]; then
     echo "removed ~/.local/bin/roostbar"
 fi
 
-# 3. Autostart line in the session script (the one install.sh told you to add).
+# 3. Autostart: the session.d drop-in, and the older single-line form if it
+#    is still there. The session.d support itself stays in
+#    raven-wayland-session -- it is generic, and other programs may use it.
+SESSION_D="${XDG_CONFIG_HOME:-$HOME/.config}/raven/session.d"
+if [ -e "$SESSION_D/50-roostbar" ]; then
+    rm -f "$SESSION_D/50-roostbar"
+    echo "removed $SESSION_D/50-roostbar"
+fi
 SESSION=/usr/bin/raven-wayland-session
 if [ -r "$SESSION" ] && grep -q 'local/bin/roostbar' "$SESSION"; then
     echo "removing autostart line from $SESSION"

@@ -78,9 +78,23 @@ roostbar &              # run now
 and drops `contrib/bluetoothd.toml` into `/etc/raven/init.d`. On anything
 else it just tells you what to install.
 
-`scripts/install.sh` prints the one `sudo sed` line that adds the bar to
-`/usr/bin/raven-wayland-session`, the only place a Huginn session starts
-programs from.
+### Autostart: `session.d`
+
+Raven has no user service manager (raven-init runs system services as root,
+before any login, and its services have no `user =`), so the bar is started
+the way Raven starts its own wallpaper daemon: from the session script.
+Rather than a hand-edited line, `scripts/install.sh` patches
+`/usr/bin/raven-wayland-session` once (`contrib/raven-wayland-session.patch`,
+original kept as `.orig`) to add a general mechanism:
+
+```
+/etc/raven/session.d/*              machine-wide
+~/.config/raven/session.d/*         per user; same name overrides or masks
+```
+
+Every executable there is started once the compositor has bound its socket,
+with `WAYLAND_DISPLAY` set, as the session user, detached in its own process
+group, in name order. The bar's drop-in is `~/.config/raven/session.d/50-roostbar`.
 
 Uninstall:
 
