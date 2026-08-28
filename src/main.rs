@@ -7,6 +7,7 @@ mod pipewire_audio;
 mod pipewire_cli;
 #[cfg(not(feature = "pipewire-native"))]
 use pipewire_cli as pipewire_audio;
+mod raven_shell;
 mod render;
 mod system;
 
@@ -36,12 +37,13 @@ use smithay_client_toolkit::{
 use wayland_client::{
     globals::registry_queue_init,
     protocol::{wl_output, wl_pointer, wl_seat, wl_shm, wl_surface},
-    Connection, QueueHandle,
+    Connection, Dispatch, QueueHandle,
 };
 
 use audio::{Audio, Volume};
 use bluetooth::{BtState, Bluetooth};
 use config::{parse_color, Config};
+use raven_shell::raven_shell_manager_v1::RavenShellManagerV1;
 use render::{Canvas, Text};
 use system::{Battery, Wifi};
 
@@ -124,6 +126,10 @@ struct Bar {
     shm: Shm,
     pool: SlotPool,
     layer: LayerSurface,
+    /// Huginn's shell protocol, bound only when the compositor speaks the
+    /// version that has `open_quick_settings`. None on an older Huginn, in
+    /// which case a click on the battery does nothing.
+    shell: Option<RavenShellManagerV1>,
     pointer: Option<wl_pointer::WlPointer>,
     loop_handle: calloop::LoopHandle<'static, Bar>,
     wake_token: Option<calloop::RegistrationToken>,
@@ -160,6 +166,7 @@ struct Colors {
     accent: [u8; 4],
     muted: [u8; 4],
     warning: [u8; 4],
+    charging: [u8; 4],
 }
 
 fn is_running(name: &str) -> bool {
@@ -339,6 +346,12 @@ fn main() {
     let compositor = CompositorState::bind(&globals, &qh).expect("roostbar: wl_compositor");
     let layer_shell = LayerShell::bind(&globals, &qh).expect("roostbar: compositor has no zwlr_layer_shell_v1");
     let shm = Shm::bind(&globals, &qh).expect("roostbar: wl_shm");
+    // Version 2 is where open_quick_settings appeared; a compositor that
+    // only offers 1 cannot take the request, so it is the same as no global.
+    let shell: Option<RavenShellManagerV1> = globals.bind(&qh, 2..=2, ()).ok();
+    if shell.is_none() {
+        eprintln!("roostbar: compositor has no raven_shell_manager_v1 v2; battery click will not open quick settings");
+    }
 
     let surface = compositor.create_surface(&qh);
     let layer = layer_shell.create_layer_surface(&qh, surface, Layer::Top, Some("roostbar"), None);
@@ -363,6 +376,7 @@ fn main() {
         accent: parse_color(&cfg.accent),
         muted: parse_color(&cfg.muted),
         warning: parse_color(&cfg.warning),
+        charging: parse_color(if cfg.charging.trim().is_empty() { &cfg.accent } else { &cfg.charging }),
     };
 
     let audio = AudioBackend::select(&cfg);
@@ -379,6 +393,7 @@ fn main() {
         shm,
         pool,
         layer,
+        shell,
         pointer: None,
         loop_handle: event_loop.handle(),
         wake_token: None,
@@ -547,8 +562,22 @@ impl Bar {
         if let Some(b) = &self.battery {
             let icons = ["󰂎", "󰁺", "󰁻", "󰁼", "󰁽", "󰁾", "󰁿", "󰂀", "󰂁", "󰂂", "󰁹"];
             let idx = ((b.percent as usize) * 10 / 100).min(10);
-            let icon = if b.charging { "󰂄" } else if b.full { "󰁹" } else { icons[idx] };
-            let col = if !b.charging && b.percent <= 15 { c.warning } else { c.fg };
+            // Three plugged-in shapes: filling (bolt), full and still on the
+            // charger (plug), full and off it. The last one is the moment
+            // after the adapter is pulled, while the kernel still says Full
+            // but no supply reports `online`; the plain battery icon is the
+            // honest one there.
+            let (icon, col) = if b.charging {
+                ("󰂄", c.charging)
+            } else if b.full && b.plugged {
+                ("󰚥", c.charging)
+            } else if b.full {
+                ("󰁹", c.fg)
+            } else if b.percent <= self.cfg.battery_low {
+                (icons[idx], c.warning)
+            } else {
+                (icons[idx], c.fg)
+            };
             right.push((Module::Battery, format!("{icon} {}%", b.percent), col));
         }
         right.push((Module::Clock, self.clock.clone(), c.fg));
@@ -624,6 +653,11 @@ impl Bar {
             (Module::Volume, BTN_LEFT) | (Module::Volume, BTN_MIDDLE) => self.audio.toggle_mute(),
             (Module::Bluetooth, BTN_LEFT) => self.bt.primary_action(self.cfg.bluetooth_device.clone()),
             (Module::Bluetooth, BTN_MIDDLE) | (Module::Bluetooth, BTN_RIGHT) => self.bt.toggle_power(),
+            (Module::Battery, BTN_LEFT) => {
+                if let Some(shell) = &self.shell {
+                    shell.open_quick_settings();
+                }
+            }
             _ => {}
         }
         // Actions are async on both backends; poll soon so the bar catches up.
@@ -760,6 +794,20 @@ impl PointerHandler for Bar {
 impl ShmHandler for Bar {
     fn shm_state(&mut self) -> &mut Shm {
         &mut self.shm
+    }
+}
+
+/// The manager has no events, so there is nothing to handle; the impl exists
+/// because binding a global needs a Dispatch target.
+impl Dispatch<RavenShellManagerV1, ()> for Bar {
+    fn event(
+        _: &mut Self,
+        _: &RavenShellManagerV1,
+        _: raven_shell::raven_shell_manager_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
     }
 }
 

@@ -20,6 +20,13 @@ no Qt, ~4 MB binary, negligible CPU (redraws only when something changes).
 | Volume     | click         | toggle mute                                         |
 | Bluetooth  | left click    | connected → disconnect; off → power on; idle → connect to `bluetooth_device`, else a trusted paired device |
 | Bluetooth  | middle/right  | toggle adapter power                                |
+| Battery    | left click    | open Huginn's quick settings (brightness, power, ...) |
+
+The battery click goes through `raven_shell_manager_v1.open_quick_settings`
+(RoostBar carries its own copy of the protocol in `protocols/`), so the bar
+never draws a panel of its own: the compositor opens the same one the
+keybinding does. On a Huginn too old to offer version 2 of the global the
+click does nothing and the bar says so once at startup.
 
 Huginn's keybindings are hardcoded and don't include volume keys, so there is
 a CLI that uses the same backend as the bar:
@@ -123,3 +130,4 @@ Debug: `ROOSTBAR_DEBUG=1 roostbar` logs backend choice, size, volume changes.
 - `src/audio.rs` — ALSA fallback
 - `src/bluetooth.rs` — BlueZ over D-Bus (`zbus`), actions on a worker thread
 - `src/system.rs` — battery (sysfs), Wi‑Fi (`caw status`)
+- `src/raven_shell.rs` — `raven_shell_v1` client bindings, generated from `protocols/`

@@ -988,7 +988,9 @@ dependencies = [
  "serde_json",
  "smithay-client-toolkit",
  "toml 0.9.12+spec-1.1.0",
+ "wayland-backend",
  "wayland-client",
+ "wayland-scanner",
  "zbus",
 ]
 

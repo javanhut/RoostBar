@@ -2,3 +2,4 @@
 target/CACHEDIR.TAG
 target/release
 .lazy/
+target/

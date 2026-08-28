@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<protocol name="raven_shell_v1">
+  <copyright>
+    Copyright (c) 2026 Javan Hutchinson
+    SPDX-License-Identifier: MIT OR Apache-2.0
+  </copyright>
+
+  <description summary="privileged shell protocol for the Huginn compositor">
+    The contract between the Huginn compositor and the Muninn desktop shell.
+
+    This protocol covers only what no standard protocol provides. Panels, the
+    dock and the wallpaper are wlr-layer-shell surfaces; the lock screen is
+    ext-session-lock-v1. Do not duplicate those here.
+
+    The compositor should only advertise this global to clients it considers
+    privileged. Huginn does not yet enforce that, which is tracked as a gap
+    rather than a design decision.
+
+    Stability: additive changes only. Add requests and events and bump the
+    interface version; never change or remove an existing one. Keeping to that
+    is what makes moving this file to its own repository a mechanical step.
+  </description>
+
+  <interface name="raven_shell_manager_v1" version="2">
+    <description summary="entry point for the desktop shell">
+      Handed to the shell so it can observe compositor state it cannot see as an
+      ordinary Wayland client.
+    </description>
+
+    <request name="destroy" type="destructor">
+      <description summary="release the manager">
+        Objects created through this manager are unaffected and must be
+        destroyed separately.
+      </description>
+    </request>
+
+    <request name="get_workspace_state">
+      <description summary="observe workspace state">
+        Create an object reporting how many workspaces exist, which one is
+        active, and which hold windows, so a panel can render indicators.
+
+        The compositor sends one state event immediately on creation, so a
+        client never has to render a placeholder while it waits.
+      </description>
+      <arg name="id" type="new_id" interface="raven_workspace_state_v1"/>
+    </request>
+
+    <request name="open_quick_settings" since="2">
+      <description summary="open the compositor-drawn quick settings panel">
+        Open the quick settings panel, exactly as the keybinding would. The
+        panel is drawn by the compositor, so a bar that wants a click on its
+        battery to lead somewhere has to ask for it here; it has no surface of
+        its own to show.
+
+        A no-op if the panel is already open, and while the session is locked:
+        nothing resolves under the lock screen, and a request from a client is
+        not an exception to that.
+      </description>
+    </request>
+  </interface>
+
+  <interface name="raven_workspace_state_v1" version="1">
+    <description summary="workspace count, active index and occupancy">
+      Created through raven_shell_manager_v1.get_workspace_state.
+    </description>
+
+    <request name="destroy" type="destructor">
+      <description summary="stop observing workspace state"/>
+    </request>
+
+    <request name="activate">
+      <description summary="switch to a workspace">
+        Ask the compositor to make workspace 'index' active.
+
+        An out-of-range index is ignored rather than clamped: clamping would
+        turn a shell bug into a silent jump to an unrelated workspace, which is
+        harder to notice than nothing happening.
+      </description>
+      <arg name="index" type="uint" summary="zero-based workspace index"/>
+    </request>
+
+    <event name="state">
+      <description summary="workspace state changed">
+        Sent once when this object is created, and again whenever any field
+        changes. The compositor does not send this event if nothing changed.
+      </description>
+      <arg name="count" type="uint" summary="total number of workspaces"/>
+      <arg name="active" type="uint" summary="zero-based index of the active workspace"/>
+      <arg name="occupied" type="uint"
+           summary="bitmask; bit N is set if workspace N holds at least one window. Caps at 32 workspaces, which is well beyond any sane count"/>
+    </event>
+  </interface>
+</protocol>

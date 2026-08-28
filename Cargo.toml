@@ -7,6 +7,8 @@ description = "A thin, glanceable status bar for Huginn on Raven Linux"
 [dependencies]
 smithay-client-toolkit = { version = "0.21", default-features = false, features = ["calloop"] }
 wayland-client = "0.31"
+wayland-backend = "0.3"
+wayland-scanner = "0.31"
 calloop = "0.14"
 calloop-wayland-source = "0.4"
 ab_glyph = "0.2"

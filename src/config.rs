@@ -18,6 +18,10 @@ pub struct Config {
     pub accent: String,
     pub muted: String,
     pub warning: String,
+    /// Colour of the battery reading while plugged in. Defaults to `accent`
+    /// so a charging laptop reads the same as a connected headset: something
+    /// good is happening. Empty = same as `accent`.
+    pub charging: String,
     /// Horizontal padding on each side of the bar and between modules.
     pub padding: u32,
     pub gap: u32,
@@ -35,6 +39,9 @@ pub struct Config {
     /// Bluetooth MAC (AA:BB:CC:DD:EE:FF) to connect on click. Empty = last connected/paired.
     pub bluetooth_device: String,
     pub battery: String,
+    /// Battery percentage at or below which the reading turns `warning`,
+    /// unless it is charging.
+    pub battery_low: u32,
     pub wifi_interface: String,
 }
 
@@ -51,6 +58,7 @@ impl Default for Config {
             accent: "#7AA2F7".into(),
             muted: "#565F89".into(),
             warning: "#F7768E".into(),
+            charging: String::new(),
             padding: 12,
             gap: 18,
             clock_format: "%H:%M".into(),
@@ -62,6 +70,7 @@ impl Default for Config {
             volume_step: 5,
             bluetooth_device: String::new(),
             battery: "BAT0".into(),
+            battery_low: 15,
             wifi_interface: String::new(),
         }
     }
