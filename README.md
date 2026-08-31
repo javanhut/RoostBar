@@ -18,7 +18,7 @@ no Qt, ~4 MB binary, negligible CPU (redraws only when something changes).
 |------------|---------------|-----------------------------------------------------|
 | Volume     | scroll        | ±5 % (`volume_step`)                                |
 | Volume     | click         | toggle mute                                         |
-| Bluetooth  | left click    | connected → disconnect; off → power on; idle → connect to `bluetooth_device`, else a trusted paired device |
+| Bluetooth  | left click    | connected → disconnect; off → power on; idle → connect to `bluetooth_device` (pairing it first if it never has been), else a trusted paired device; nothing paired and no MAC → open Huginn's quick settings, which has the device list |
 | Bluetooth  | middle/right  | toggle adapter power                                |
 | Battery    | left click    | open Huginn's quick settings (brightness, power, ...) |
 
@@ -69,8 +69,29 @@ sudo cp contrib/bluetoothd.toml /etc/raven/init.d/
 sudo raven-rc reload && sudo raven-rc start bluetoothd
 ```
 
-Pair once with `bluetoothctl` (`scan on`, `pair`, `trust`); after that the
-bar's icon connects/disconnects with a click.
+Pairing needs a device list, and the bar does not draw one: Huginn's quick
+settings (click the battery, or the keybinding) has a Bluetooth row that
+scans, pairs and connects. Two ways that need no panel at all:
+
+- Put the device's MAC in `bluetooth_device` and click the icon. The bar
+  scans for that address for up to 30 s, pairs it ("just works" — the bar
+  cannot type a PIN, so an old keyboard that wants one needs the panel),
+  marks it trusted and connects. The icon reads `scanning for …`,
+  `pairing …`, `connecting …` while it happens.
+- `roostbar bt` on the command line, for a machine without `bluetoothctl`:
+
+  ```
+  roostbar bt list                # adapter state and every known device
+  roostbar bt scan [secs]         # print what is in range (default 15 s)
+  roostbar bt pair [MAC]          # find, pair, trust, connect (MAC defaults to bluetooth_device)
+  roostbar bt connect [MAC]       # a paired device (default: a trusted one)
+  roostbar bt disconnect
+  roostbar bt forget MAC          # unpair
+  roostbar bt on | off
+  ```
+
+Once paired, the icon connects/disconnects with a click, and a trusted
+device reconnects by itself when it comes back in range.
 
 ## Build & install
 

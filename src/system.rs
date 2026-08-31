@@ -42,6 +42,16 @@ fn ac_online() -> bool {
     })
 }
 
+/// raven-powerd publishes the power profile it last applied here, one word.
+const PROFILE_MARKER: &str = "/run/raven-power/profile";
+
+/// Whether the machine is held in the power-saver ("eco") profile. A missing
+/// marker -- no raven-powerd, or one too old to publish it -- reads as not
+/// eco, which is the honest default for a bar.
+pub fn eco_mode() -> bool {
+    std::fs::read_to_string(PROFILE_MARKER).map(|s| s.trim() == "power-saver").unwrap_or(false)
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Wifi {
     Unavailable,

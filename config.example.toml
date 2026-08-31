@@ -31,8 +31,10 @@ alsa_card = ""
 alsa_mixer = "Master"
 volume_step = 5           # percent per scroll notch / `roostbar vol up`
 
-# Bluetooth device to connect on click, as a MAC. Empty = a trusted paired
-# device, else any paired device.
+# Bluetooth device to connect on click, as a MAC. Paired on the first click
+# if it never has been (put it in pairing mode first). Empty = a trusted
+# paired device, else any paired device, else the click opens Huginn's quick
+# settings where devices can be picked.
 bluetooth_device = ""
 
 battery = "BAT0"

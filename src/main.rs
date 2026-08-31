@@ -155,6 +155,8 @@ struct Bar {
     bt_state: BtState,
     wifi: Wifi,
     battery: Option<Battery>,
+    /// raven-powerd says the machine is in its power-saver profile.
+    eco: bool,
     clock: String,
     date: String,
     last_slow_poll: Instant,
@@ -330,6 +332,10 @@ fn main() {
         }
         return;
     }
+    if std::env::args().nth(1).is_some_and(|a| a == "bt" || a == "bluetooth") {
+        let rest: Vec<String> = std::env::args().skip(2).collect();
+        std::process::exit(bluetooth::cli(&rest, &cfg.bluetooth_device));
+    }
     if cfg.start_pipewire {
         spawn_pipewire();
     }
@@ -416,6 +422,7 @@ fn main() {
         bt_state: BtState::NoStack,
         wifi: Wifi::Unavailable,
         battery: None,
+        eco: false,
         clock: String::new(),
         date: String::new(),
         last_slow_poll: Instant::now() - Duration::from_secs(60),
@@ -528,10 +535,12 @@ impl Bar {
         let battery = system::battery(&self.cfg.battery);
         let wifi = system::wifi(&self.cfg.wifi_interface);
         let bt = self.bt.state();
-        if battery != self.battery || wifi != self.wifi || bt != self.bt_state {
+        let eco = system::eco_mode();
+        if battery != self.battery || wifi != self.wifi || bt != self.bt_state || eco != self.eco {
             self.battery = battery;
             self.wifi = wifi;
             self.bt_state = bt;
+            self.eco = eco;
             self.dirty = true;
         }
     }
@@ -550,6 +559,7 @@ impl Bar {
             BtState::Idle => right.push((Module::Bluetooth, "󰂯".into(), c.fg)),
             BtState::Off => right.push((Module::Bluetooth, "󰂲".into(), c.muted)),
             BtState::NoStack => right.push((Module::Bluetooth, "󰂲 —".into(), c.muted)),
+            BtState::Busy(what) => right.push((Module::Bluetooth, format!("󰂯 {what}…"), c.accent)),
         }
         match self.volume {
             Some(Volume { muted: true, .. }) => right.push((Module::Volume, "󰝟 mute".into(), c.muted)),
@@ -578,7 +588,14 @@ impl Bar {
             } else {
                 (icons[idx], c.fg)
             };
-            right.push((Module::Battery, format!("{icon} {}%", b.percent), col));
+            // Eco: a leaf ahead of the battery, so the reason the machine is
+            // being frugal is visible where the battery is read.
+            let text = if self.eco {
+                format!("󰌪 {icon} {}%", b.percent)
+            } else {
+                format!("{icon} {}%", b.percent)
+            };
+            right.push((Module::Battery, text, col));
         }
         right.push((Module::Clock, self.clock.clone(), c.fg));
 
@@ -651,7 +668,15 @@ impl Bar {
     fn click(&mut self, module: Module, button: u32) {
         match (module, button) {
             (Module::Volume, BTN_LEFT) | (Module::Volume, BTN_MIDDLE) => self.audio.toggle_mute(),
-            (Module::Bluetooth, BTN_LEFT) => self.bt.primary_action(self.cfg.bluetooth_device.clone()),
+            (Module::Bluetooth, BTN_LEFT) => {
+                // Nothing paired and no MAC configured: the bar has no list
+                // to offer, but the compositor's panel does.
+                if !self.bt.primary_action(self.cfg.bluetooth_device.clone()) {
+                    if let Some(shell) = &self.shell {
+                        shell.open_quick_settings();
+                    }
+                }
+            }
             (Module::Bluetooth, BTN_MIDDLE) | (Module::Bluetooth, BTN_RIGHT) => self.bt.toggle_power(),
             (Module::Battery, BTN_LEFT) => {
                 if let Some(shell) = &self.shell {
