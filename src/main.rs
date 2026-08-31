@@ -455,7 +455,32 @@ fn main() {
         if bar.exit {
             break;
         }
+        // A dead compositor connection delivers no more events, but its
+        // socket reports HUP forever — and calloop's level-triggered poll
+        // turns that into a busy loop: an invisible bar burning a core for
+        // hours. It happens for real: a flapping monitor cable can make the
+        // compositor kill every client with a protocol error mid-session.
+        // Restarting reconnects (waiting for the compositor if need be) and
+        // puts the bar back on screen.
+        if conn.protocol_error().is_some() || conn.flush().is_err() {
+            eprintln!("roostbar: wayland connection lost; restarting");
+            restart();
+        }
     }
+}
+
+/// Replace this process with a fresh copy of itself.
+///
+/// Used when the compositor connection dies: the session manager only starts
+/// the bar once, so exiting would leave the session bar-less for good. The
+/// pause bounds the restart rate if the compositor is refusing us on sight.
+fn restart() -> ! {
+    use std::os::unix::process::CommandExt;
+    std::thread::sleep(Duration::from_secs(1));
+    let exe = std::env::current_exe().unwrap_or_else(|_| "/proc/self/exe".into());
+    let err = std::process::Command::new(exe).args(std::env::args_os().skip(1)).exec();
+    eprintln!("roostbar: restart failed: {err}");
+    std::process::exit(1);
 }
 
 impl Bar {
@@ -471,15 +496,21 @@ impl Bar {
             .loop_handle
             .insert_source(Generic::new(fd, Interest::READ, Mode::Level), |_, stream, bar: &mut Bar| {
                 let mut buf = [0u8; 64];
+                let mut closed = false;
                 // SAFETY: Generic hands back the same UnixStream we inserted.
                 while let Ok(n) = unsafe { stream.get_mut() }.read(&mut buf) {
                     if n == 0 {
+                        closed = true;
                         break;
                     }
                 }
                 bar.refresh_fast();
                 bar.draw();
-                Ok(PostAction::Continue)
+                // A read of zero is the writer gone: PipeWire's thread ended.
+                // Under level-triggered polling an EOF'd socket is readable
+                // forever, so leaving the source in place would spin the
+                // loop; the next slow poll re-selects a backend anyway.
+                Ok(if closed { PostAction::Remove } else { PostAction::Continue })
             })
             .ok();
     }
