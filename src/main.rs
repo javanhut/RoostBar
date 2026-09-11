@@ -110,6 +110,24 @@ enum Module {
     Clock,
 }
 
+impl Module {
+    /// Whether a click does something here; see [`Bar::click`].
+    fn clickable(self) -> bool {
+        matches!(self, Self::Volume | Self::Bluetooth | Self::Battery)
+    }
+
+    /// Whether the module reacts to the pointer at all — a click or a
+    /// scroll — and so should brighten under it.
+    fn responds(self) -> bool {
+        self.clickable() || matches!(self, Self::Wifi)
+    }
+}
+
+/// White at ~9%: the line where the bar meets the desktop. ARGB.
+const HAIRLINE: [u8; 4] = [0x16, 0xFF, 0xFF, 0xFF];
+/// White at ~14%: the pill behind a hovered, clickable module. ARGB.
+const HOVER_PILL: [u8; 4] = [0x24, 0xFF, 0xFF, 0xFF];
+
 struct Segment {
     module: Module,
     text: String,
@@ -369,7 +387,7 @@ fn main() {
     layer.commit();
 
     let pool = SlotPool::new(1920 * cfg.height as usize * 4, &shm).expect("roostbar: shm pool");
-    let text = match Text::load(&cfg.font, cfg.font_size) {
+    let text = match Text::load(&cfg.ui_font, &cfg.font, cfg.font_size) {
         Ok(t) => t,
         Err(e) => {
             eprintln!("roostbar: font: {e}");
@@ -670,15 +688,32 @@ impl Bar {
         let mut canvas = Canvas { buf: canvas_buf, width: pw, height: ph };
         canvas.fill(self.colors.bg);
 
+        // The hairline on the edge that faces the desktop: the bar is a
+        // strip of the same glass as the dock, and a strip needs an edge
+        // where it stops or it bleeds into whatever is under it.
+        let hairline_y = if self.cfg.position == "bottom" { 0 } else { ph as i32 - 1 };
+        canvas.hline(hairline_y, HAIRLINE);
+
         let scale = self.text.with_scale(self.scale as f32);
-        let hover_pad = 6.0 * self.scale as f32;
+        let s = self.scale as f32;
         for seg in &self.segments {
-            if self.hover == Some(seg.module) && matches!(seg.module, Module::Volume | Module::Bluetooth) {
-                let mut hl = self.colors.fg;
-                hl[0] = 24;
-                canvas.fill_rect((seg.x0 - hover_pad) as i32, 0, (seg.x1 - seg.x0 + 2.0 * hover_pad) as i32, ph as i32, hl);
+            let hovered = self.hover == Some(seg.module);
+            if hovered && seg.module.clickable() {
+                // A pill behind the module, inset from the bar's edges so it
+                // reads as a highlight on the strip rather than a cut in it.
+                let pad = 8.0 * s;
+                let inset = 4.0 * s;
+                let h = ph as f32 - inset * 2.0;
+                canvas.fill_rounded(seg.x0 - pad, inset, seg.x1 - seg.x0 + pad * 2.0, h, h / 2.0, HOVER_PILL);
             }
-            self.text.draw(&mut canvas, &seg.text, seg.x0, scale, seg.color);
+            // A muted module brightens under the pointer, so a hover says
+            // "this responds" even where there is no pill.
+            let color = if hovered && seg.module.responds() && seg.color == self.colors.muted {
+                self.colors.fg
+            } else {
+                seg.color
+            };
+            self.text.draw(&mut canvas, &seg.text, seg.x0, scale, color);
         }
 
         let surface = self.layer.wl_surface();

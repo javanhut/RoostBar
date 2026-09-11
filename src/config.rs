@@ -10,6 +10,10 @@ pub struct Config {
     pub height: u32,
     /// Reserve space so windows never sit under the bar.
     pub exclusive: bool,
+    /// The face the bar's words and numbers are set in. Empty or missing
+    /// on disk = every character from `font`, as before there were two.
+    pub ui_font: PathBuf,
+    /// The Nerd Font: icon glyphs, and anything `ui_font` cannot draw.
     pub font: PathBuf,
     pub font_size: f32,
     /// Colours as #RRGGBB or #AARRGGBB.
@@ -49,18 +53,19 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             position: "top".into(),
-            height: 26,
+            height: 28,
             exclusive: true,
+            ui_font: "/usr/share/fonts/noto/NotoSans-Regular.ttf".into(),
             font: "/usr/share/fonts/JetBrainsMonoNerdFontMono-Regular.ttf".into(),
-            font_size: 13.0,
-            background: "#D916161F".into(),
-            foreground: "#C0CAF5".into(),
+            font_size: 13.5,
+            background: "#D816161F".into(),
+            foreground: "#E8E8F0".into(),
             accent: "#7AA2F7".into(),
-            muted: "#565F89".into(),
+            muted: "#9A9AB0".into(),
             warning: "#F7768E".into(),
             charging: String::new(),
             padding: 12,
-            gap: 18,
+            gap: 16,
             clock_format: "%H:%M".into(),
             date_format: "%a %d %b".into(),
             show_date: true,

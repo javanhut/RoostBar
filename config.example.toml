@@ -1,21 +1,28 @@
 # ~/.config/roostbar/config.toml — every key is optional; these are the defaults.
 
 position = "top"          # "top" or "bottom"
-height = 26
+height = 28
 exclusive = true          # reserve the strip so windows never sit under it
-font = "/usr/share/fonts/JetBrainsMonoNerdFontMono-Regular.ttf"
-font_size = 13.0
 
-# #RRGGBB or #AARRGGBB. Default background is 85% opaque Raven dark.
-background = "#D916161F"
-foreground = "#C0CAF5"
+# Two faces: words and numbers in the UI font, icon glyphs (and anything the
+# UI font lacks) in the Nerd Font. If ui_font cannot be loaded everything is
+# drawn with `font`, as it was before there were two.
+ui_font = "/usr/share/fonts/noto/NotoSans-Regular.ttf"
+font = "/usr/share/fonts/JetBrainsMonoNerdFontMono-Regular.ttf"
+font_size = 13.5
+
+# #RRGGBB or #AARRGGBB. The defaults are the Raven Glass material the dock
+# and launcher are drawn in: 85% opaque Raven dark, Raven's body and
+# secondary text colours. Raven Settings rewrites these when the theme changes.
+background = "#D816161F"
+foreground = "#E8E8F0"
 accent = "#7AA2F7"
-muted = "#565F89"
+muted = "#9A9AB0"
 warning = "#F7768E"
 charging = ""             # battery reading while plugged in; empty = accent
 
 padding = 12              # px at either end of the bar
-gap = 18                  # px between modules
+gap = 16                  # px between modules
 
 clock_format = "%H:%M"
 date_format = "%a %d %b"

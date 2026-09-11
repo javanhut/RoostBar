@@ -1,16 +1,21 @@
 # RoostBar
 
 A thin, glanceable status bar for **Huginn** on **Raven Linux**. One strip,
-26 px, semi-transparent, sitting in a `zwlr_layer_shell` exclusive zone so no
-window ever hides it:
+28 px, drawn in the same translucent Raven Glass as the dock and launcher —
+a hairline where it meets the desktop, a pill under whichever module the
+pointer is on — sitting in a `zwlr_layer_shell` exclusive zone so no window
+ever hides it:
 
 ```
  Thu 28 Aug                     󰤨 Hutchinson6   󰂱 WH-1000XM4   󰕾 45%   󰁹 99%   14:32
 ```
 
 Left: date. Right: Wi‑Fi (SSID via `caw`), Bluetooth, volume, battery, clock.
-Software-rendered with the JetBrains Mono Nerd Font already on Raven; no GTK,
-no Qt, ~4 MB binary, negligible CPU (redraws only when something changes).
+Software-rendered: words and numbers in Noto Sans, the icon glyphs from the
+JetBrains Mono Nerd Font already on Raven (`ui_font` and `font` in the
+config; without a usable `ui_font` everything falls back to the Nerd Font).
+No GTK, no Qt, ~4 MB binary, negligible CPU (redraws only when something
+changes).
 
 ## Interaction
 

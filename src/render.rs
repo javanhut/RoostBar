@@ -1,4 +1,4 @@
-use ab_glyph::{point, Font, FontVec, PxScale, ScaleFont};
+use ab_glyph::{point, Font, FontVec, GlyphId, PxScale, ScaleFont};
 
 pub struct Canvas<'a> {
     pub buf: &'a mut [u8],
@@ -33,10 +33,53 @@ impl<'a> Canvas<'a> {
         }
     }
 
+    /// Kept beside `fill_rounded` for a square-cornered fill; nothing in the
+    /// bar draws one today.
+    #[allow(dead_code)]
     pub fn fill_rect(&mut self, x: i32, y: i32, w: i32, h: i32, argb: [u8; 4]) {
         for yy in y..y + h {
             for xx in x..x + w {
                 self.blend(xx, yy, argb, 1.0);
+            }
+        }
+    }
+
+    /// A full-width one-pixel line at row `y`: the hairline where the bar
+    /// meets the desktop.
+    pub fn hline(&mut self, y: i32, argb: [u8; 4]) {
+        for xx in 0..self.width as i32 {
+            self.blend(xx, y, argb, 1.0);
+        }
+    }
+
+    /// A rectangle with rounded corners, antialiased.
+    ///
+    /// The corners sample distance from the arc's centre rather than
+    /// stepping a scanline, the same way Huginn's canvas does it: at the
+    /// radius a hover pill uses, a hard cutoff is a visible staircase.
+    pub fn fill_rounded(&mut self, x: f32, y: f32, w: f32, h: f32, radius: f32, argb: [u8; 4]) {
+        if w <= 0.0 || h <= 0.0 {
+            return;
+        }
+        let radius = radius.min(w / 2.0).min(h / 2.0).max(0.0);
+        let (x0, y0) = (x.floor() as i32, y.floor() as i32);
+        let (x1, y1) = ((x + w).ceil() as i32, (y + h).ceil() as i32);
+        for py in y0..y1 {
+            let ly = py as f32 + 0.5 - y;
+            // Distance past the corner arc along each axis, zero in the body.
+            let dy = (radius - ly).max(ly - (h - radius)).max(0.0);
+            for px in x0..x1 {
+                let lx = px as f32 + 0.5 - x;
+                let dx = (radius - lx).max(lx - (w - radius)).max(0.0);
+                let cov = if dx == 0.0 && dy == 0.0 {
+                    // Inside the body: only the rectangle's own edges matter.
+                    (lx.min(w - lx) + 0.5).clamp(0.0, 1.0) * (ly.min(h - ly) + 0.5).clamp(0.0, 1.0)
+                } else {
+                    (radius - dx.hypot(dy) + 0.5).clamp(0.0, 1.0)
+                };
+                if cov > 0.0 {
+                    self.blend(px, py, argb, cov);
+                }
             }
         }
     }
@@ -47,59 +90,112 @@ fn premul(a: u8, r: u8, g: u8, b: u8) -> [u8; 4] {
     [m(b), m(g), m(r), a]
 }
 
+/// Which face a character is drawn with.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Face {
+    /// The UI typeface: everything it has a glyph for.
+    Ui,
+    /// The Nerd Font: the icon glyphs, and anything the UI face lacks.
+    Icon,
+}
+
+/// The bar's type: a UI face for words and numbers, and the Nerd Font kept
+/// for the icon glyphs the UI face cannot draw.
+///
+/// One face at a time reads either as a terminal (everything in the mono
+/// Nerd Font) or as a bar with no icons; two faces, chosen per character,
+/// is how the bar gets both.
 pub struct Text {
-    font: FontVec,
+    /// The UI face, when it loaded. `None` means the single-font bar of old:
+    /// every character comes from `icon`.
+    ui: Option<FontVec>,
+    icon: FontVec,
     scale: PxScale,
 }
 
 impl Text {
-    pub fn load(path: &std::path::Path, size: f32) -> Result<Self, String> {
-        let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
-        let font = FontVec::try_from_vec(bytes).map_err(|e| format!("{}: {e:?}", path.display()))?;
-        Ok(Self { font, scale: PxScale::from(size) })
+    /// `ui` is tried first and is optional; `icon` must load.
+    pub fn load(ui: &std::path::Path, icon: &std::path::Path, size: f32) -> Result<Self, String> {
+        let icon = load_font(icon)?;
+        let ui = match load_font(ui) {
+            Ok(f) => Some(f),
+            Err(e) => {
+                eprintln!("roostbar: ui_font: {e}; drawing everything with the icon font");
+                None
+            }
+        };
+        Ok(Self { ui, icon, scale: PxScale::from(size) })
     }
 
     pub fn with_scale(&self, factor: f32) -> PxScale {
         PxScale::from(self.scale.x * factor)
     }
 
-    pub fn width(&self, s: &str, scale: PxScale) -> f32 {
-        let f = self.font.as_scaled(scale);
-        let mut w = 0.0;
-        let mut prev = None;
-        for c in s.chars() {
-            let id = f.glyph_id(c);
-            if let Some(p) = prev {
-                w += f.kern(p, id);
+    /// The face for `c`: the UI face if it has the glyph, else the icon face.
+    fn face_of(&self, c: char) -> (Face, GlyphId) {
+        if let Some(ui) = &self.ui {
+            let id = ui.glyph_id(c);
+            if id.0 != 0 {
+                return (Face::Ui, id);
             }
-            w += f.h_advance(id);
-            prev = Some(id);
         }
-        w
+        (Face::Icon, self.icon.glyph_id(c))
     }
 
-    /// Draw `s` with its left edge at `x`, vertically centred in the canvas.
-    pub fn draw(&self, canvas: &mut Canvas, s: &str, x: f32, scale: PxScale, color: [u8; 4]) -> f32 {
-        let f = self.font.as_scaled(scale);
-        let text_h = f.ascent() - f.descent();
-        let baseline = ((canvas.height as f32 - text_h) / 2.0 + f.ascent()).round();
-        let mut cx = x;
-        let mut prev = None;
+    fn font(&self, face: Face) -> &FontVec {
+        match face {
+            Face::Ui => self.ui.as_ref().unwrap_or(&self.icon),
+            Face::Icon => &self.icon,
+        }
+    }
+
+    /// Walk `s`, calling `f` with each glyph's face, id and pen x, and
+    /// return the total advance. Width and draw share this so they can
+    /// never disagree about where a character lands.
+    fn walk(&self, s: &str, scale: PxScale, mut f: impl FnMut(Face, GlyphId, f32)) -> f32 {
+        let mut cx = 0.0;
+        let mut prev: Option<(Face, GlyphId)> = None;
         for c in s.chars() {
-            let id = f.glyph_id(c);
-            if let Some(p) = prev {
-                cx += f.kern(p, id);
+            let (face, id) = self.face_of(c);
+            let font = self.font(face).as_scaled(scale);
+            // Kerning only means something between two glyphs of one face.
+            if let Some((pf, pid)) = prev {
+                if pf == face {
+                    cx += font.kern(pid, id);
+                }
             }
-            let glyph = id.with_scale_and_position(scale, point(cx, baseline));
-            if let Some(og) = self.font.outline_glyph(glyph) {
+            f(face, id, cx);
+            cx += font.h_advance(id);
+            prev = Some((face, id));
+        }
+        cx
+    }
+
+    pub fn width(&self, s: &str, scale: PxScale) -> f32 {
+        self.walk(s, scale, |_, _, _| {})
+    }
+
+    /// Draw `s` with its left edge at `x`, vertically centred in the canvas
+    /// on the UI face's metrics, so a line of text sits where it would in
+    /// any other Raven panel and the icons fall in beside it.
+    pub fn draw(&self, canvas: &mut Canvas, s: &str, x: f32, scale: PxScale, color: [u8; 4]) -> f32 {
+        let metrics = self.font(Face::Ui).as_scaled(scale);
+        let text_h = metrics.ascent() - metrics.descent();
+        let baseline = ((canvas.height as f32 - text_h) / 2.0 + metrics.ascent()).round();
+        self.walk(s, scale, |face, id, cx| {
+            let font = self.font(face);
+            let glyph = id.with_scale_and_position(scale, point(x + cx, baseline));
+            if let Some(og) = font.outline_glyph(glyph) {
                 let b = og.px_bounds();
                 og.draw(|gx, gy, cov| {
                     canvas.blend(b.min.x as i32 + gx as i32, b.min.y as i32 + gy as i32, color, cov);
                 });
             }
-            cx += f.h_advance(id);
-            prev = Some(id);
-        }
-        cx - x
+        })
     }
+}
+
+fn load_font(path: &std::path::Path) -> Result<FontVec, String> {
+    let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    FontVec::try_from_vec(bytes).map_err(|e| format!("{}: {e:?}", path.display()))
 }
