@@ -61,7 +61,7 @@ impl Default for Config {
             background: "#D816161F".into(),
             foreground: "#E8E8F0".into(),
             accent: "#7AA2F7".into(),
-            muted: "#9A9AB0".into(),
+            muted: "#ABABC2".into(),
             warning: "#F7768E".into(),
             charging: String::new(),
             padding: 12,
