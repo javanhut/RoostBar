@@ -12,7 +12,7 @@ mod render;
 mod system;
 
 use std::io::Read;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use calloop::generic::Generic;
 use calloop::timer::{TimeoutAction, Timer};
@@ -178,6 +178,9 @@ struct Bar {
     clock: String,
     date: String,
     last_slow_poll: Instant,
+    /// Mtime of the config file as of the last read, so the slow poll can
+    /// tell an edit from a file that has not moved.
+    cfg_mtime: Option<SystemTime>,
 }
 
 struct Colors {
@@ -187,6 +190,23 @@ struct Colors {
     muted: [u8; 4],
     warning: [u8; 4],
     charging: [u8; 4],
+}
+
+impl Colors {
+    fn from_config(cfg: &Config) -> Self {
+        Self {
+            bg: parse_color(&cfg.background),
+            fg: parse_color(&cfg.foreground),
+            accent: parse_color(&cfg.accent),
+            muted: parse_color(&cfg.muted),
+            warning: parse_color(&cfg.warning),
+            charging: parse_color(if cfg.charging.trim().is_empty() {
+                &cfg.accent
+            } else {
+                &cfg.charging
+            }),
+        }
+    }
 }
 
 fn is_running(name: &str) -> bool {
@@ -321,6 +341,7 @@ fn connect_wayland() -> Option<Connection> {
 }
 
 fn main() {
+    let cfg_mtime = Config::mtime();
     let cfg = Config::load();
     if std::env::args().any(|a| a == "--version" || a == "-V") {
         println!("roostbar {}", env!("CARGO_PKG_VERSION"));
@@ -394,14 +415,7 @@ fn main() {
             std::process::exit(1);
         }
     };
-    let colors = Colors {
-        bg: parse_color(&cfg.background),
-        fg: parse_color(&cfg.foreground),
-        accent: parse_color(&cfg.accent),
-        muted: parse_color(&cfg.muted),
-        warning: parse_color(&cfg.warning),
-        charging: parse_color(if cfg.charging.trim().is_empty() { &cfg.accent } else { &cfg.charging }),
-    };
+    let colors = Colors::from_config(&cfg);
 
     let audio = AudioBackend::select(&cfg);
     match &audio {
@@ -444,6 +458,7 @@ fn main() {
         clock: String::new(),
         date: String::new(),
         last_slow_poll: Instant::now() - Duration::from_secs(60),
+        cfg_mtime,
         cfg,
     };
     bar.install_wake_source();
@@ -578,8 +593,64 @@ impl Bar {
         }
     }
 
+    /// Pick up an edit to `~/.config/roostbar/config.toml`.
+    ///
+    /// Raven Settings rewrites that file whenever the theme, the accent, the
+    /// clock format or the bar's edge changes, and until this the bar wore
+    /// the version it was started with until someone restarted it by hand.
+    /// A stat every slow poll is cheaper than a watch and cannot miss a
+    /// rename, which is how the file is written.
+    fn reload_config(&mut self) {
+        let mtime = Config::mtime();
+        if mtime == self.cfg_mtime {
+            return;
+        }
+        self.cfg_mtime = mtime;
+        let new = Config::load();
+
+        // The font is the one thing that can fail; a bad path should leave
+        // the bar readable in the face it already has rather than blank it.
+        if new.ui_font != self.cfg.ui_font
+            || new.font != self.cfg.font
+            || new.font_size != self.cfg.font_size
+        {
+            match Text::load(&new.ui_font, &new.font, new.font_size) {
+                Ok(t) => self.text = t,
+                Err(e) => eprintln!("roostbar: font: {e}; keeping the one in use"),
+            }
+        }
+
+        // Geometry goes back to the compositor; the height we draw at
+        // arrives with the configure this provokes.
+        if new.position != self.cfg.position
+            || new.height != self.cfg.height
+            || new.exclusive != self.cfg.exclusive
+        {
+            let edge = if new.position == "bottom" { Anchor::BOTTOM } else { Anchor::TOP };
+            self.layer.set_anchor(edge | Anchor::LEFT | Anchor::RIGHT);
+            self.layer.set_size(0, new.height);
+            self.layer.set_exclusive_zone(if new.exclusive { new.height as i32 } else { 0 });
+            self.layer.commit();
+        }
+
+        if new.alsa_card != self.cfg.alsa_card || new.alsa_mixer != self.cfg.alsa_mixer {
+            self.audio = AudioBackend::select(&new);
+            eprintln!("roostbar: audio via {}", self.audio.name());
+            self.install_wake_source();
+        }
+
+        self.colors = Colors::from_config(&new);
+        self.cfg = new;
+        self.dirty = true;
+        eprintln!("roostbar: reloaded {}", Config::path().display());
+        // The clock and date are cached strings; re-format them now so a
+        // changed clock_format shows on this frame and not the next second's.
+        self.refresh_fast();
+    }
+
     fn refresh_slow(&mut self) {
         self.last_slow_poll = Instant::now();
+        self.reload_config();
         self.reselect_audio();
         let battery = system::battery(&self.cfg.battery);
         let wifi = system::wifi(&self.cfg.wifi_interface);

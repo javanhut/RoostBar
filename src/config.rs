@@ -1,5 +1,6 @@
 use serde::Deserialize;
 use std::path::PathBuf;
+use std::time::SystemTime;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
@@ -88,6 +89,14 @@ impl Config {
             .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
             .unwrap_or_else(|| PathBuf::from("."));
         base.join("roostbar").join("config.toml")
+    }
+
+    /// When the config file was last written, for the reload check in the
+    /// slow poll. `None` when there is no file (or it cannot be stat'd),
+    /// which is itself a state worth noticing: a file that appears is a
+    /// change too.
+    pub fn mtime() -> Option<SystemTime> {
+        std::fs::metadata(Self::path()).ok()?.modified().ok()
     }
 
     pub fn load() -> Self {
