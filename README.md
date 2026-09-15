@@ -28,10 +28,21 @@ changes).
 | Bluetooth  | middle click  | connected → disconnect; off → power on; idle → connect to `bluetooth_device` (pairing it first if it never has been), else a trusted paired device; nothing paired and no MAC → open Settings → Bluetooth, which has the device list |
 | Bluetooth  | right click   | toggle adapter power                                |
 | Battery    | left click    | open Raven Power (`raven-power`)                    |
-| Clock/date | left click    | open Settings → Date & Time                         |
+| Date       | left click    | open Settings → Date & Time                         |
+| Clock      | left click    | open (or close) the clock panel                     |
 
-The bar never draws a panel of its own; it starts the app that has one,
-detached, in its own process group. If `raven-settings` or `raven-power` is
+The **clock panel** hangs under the clock: the time, the date in words, and
+the notifications Huginn holds — those still open (marked with an accent dot)
+and those that closed this session, newest first. The × on a notification
+removes it, "Clear all" removes the lot, and a wheel scrolls a long list. With
+nothing to show it says "No new notifications". A click anywhere outside the
+panel closes it (that click does nothing else), as does clicking the clock
+again or any other module on the bar. The list comes from Huginn's
+`org.raven.Notifications` D-Bus interface (RavenGUI `docs/protocols.md`), so a
+Huginn without it shows an empty panel.
+
+Apart from that panel the bar draws none of its own; it starts the app that
+has one, detached, in its own process group. If `raven-settings` or `raven-power` is
 not installed the click falls back to Huginn's quick settings through
 `raven_shell_manager_v1.open_quick_settings` (RoostBar carries its own copy
 of the protocol in `protocols/`). On a Huginn too old to offer version 2 of
@@ -159,5 +170,6 @@ Debug: `ROOSTBAR_DEBUG=1 roostbar` logs backend choice, size, volume changes.
 - `src/pipewire_audio.rs` — native libpipewire backend (optional feature)
 - `src/audio.rs` — ALSA fallback
 - `src/bluetooth.rs` — BlueZ over D-Bus (`zbus`), actions on a worker thread
+- `src/notifications.rs` — Huginn's notification centre over D-Bus, for the clock panel
 - `src/system.rs` — battery (sysfs), Wi‑Fi (`caw status`)
 - `src/raven_shell.rs` — `raven_shell_v1` client bindings, generated from `protocols/`

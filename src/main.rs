@@ -1,6 +1,7 @@
 mod audio;
 mod bluetooth;
 mod config;
+mod notifications;
 #[cfg(feature = "pipewire-native")]
 mod pipewire_audio;
 #[cfg(not(feature = "pipewire-native"))]
@@ -122,6 +123,147 @@ const HAIRLINE: [u8; 4] = [0x16, 0xFF, 0xFF, 0xFF];
 /// White at ~14%: the pill behind a hovered, clickable module. ARGB.
 const HOVER_PILL: [u8; 4] = [0x24, 0xFF, 0xFF, 0xFF];
 
+// The clock panel, in logical pixels.
+const PANEL_WIDTH: u32 = 360;
+/// Between the panel and the bar, and the screen's edge.
+const PANEL_MARGIN: i32 = 8;
+const PANEL_PAD: f32 = 16.0;
+const PANEL_TOP: f32 = 12.0;
+const PANEL_BOTTOM: f32 = 14.0;
+const PANEL_GAP: f32 = 12.0;
+const PANEL_GAP_SMALL: f32 = 6.0;
+const PANEL_RADIUS: f32 = 14.0;
+const ROW_PAD: f32 = 7.0;
+const ROW_GAP: f32 = 6.0;
+const ROW_RADIUS: f32 = 10.0;
+/// The tallest the notification list gets before it scrolls.
+const LIST_MAX: f32 = 420.0;
+/// The list's height when it only says there is nothing in it.
+const EMPTY_HEIGHT: f32 = 64.0;
+/// How far one notch of a wheel scrolls the list.
+const SCROLL_NOTCH: f32 = 48.0;
+/// White at ~5% and ~9%: a notification's row, and the row under the pointer.
+const ROW_FILL: [u8; 4] = [0x0D, 0xFF, 0xFF, 0xFF];
+const ROW_HOVER: [u8; 4] = [0x18, 0xFF, 0xFF, 0xFF];
+const EMPTY_TEXT: &str = "No new notifications";
+
+/// Something on the clock panel a click does something to.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum PanelHit {
+    Remove(u32),
+    Clear,
+}
+
+/// The clock panel: the time, and the notifications Huginn holds.
+struct Panel {
+    layer: LayerSurface,
+    pool: SlotPool,
+    /// A transparent surface over the rest of the screen, under the panel: a
+    /// press on it is a click outside the panel, and closes it. Its exclusive
+    /// zone is 0, so it stays clear of the bar's own strip.
+    catcher: LayerSurface,
+    catcher_pool: SlotPool,
+    /// The height last asked of the compositor, logical.
+    requested: u32,
+    /// The size the compositor configured, logical.
+    width: u32,
+    height: u32,
+    scale: i32,
+    configured: bool,
+    dirty: bool,
+    /// Where the pointer is on the panel, logical, while it is on it.
+    pointer: Option<(f64, f64)>,
+    /// The visible part of each row, and each control, as last drawn, in
+    /// buffer pixels: drawing and clicking share one layout.
+    rows: Vec<[f32; 4]>,
+    hits: Vec<([f32; 4], PanelHit)>,
+    /// How far the list is scrolled, logical.
+    scroll: f32,
+}
+
+impl Panel {
+    /// The row and the control under the pointer, as indices into `rows` and
+    /// `hits`.
+    fn hover(&self) -> (Option<usize>, Option<usize>) {
+        let Some((x, y)) = self.pointer else { return (None, None) };
+        let s = self.scale as f32;
+        let (x, y) = (x as f32 * s, y as f32 * s);
+        let inside = |r: &[f32; 4]| x >= r[0] && x < r[0] + r[2] && y >= r[1] && y < r[1] + r[3];
+        (self.rows.iter().position(inside), self.hits.iter().position(|(r, _)| inside(r)))
+    }
+}
+
+/// The heights of the clock panel's parts, from the bar's font size.
+struct PanelMetrics {
+    clock: f32,
+    line: f32,
+    small: f32,
+    header: f32,
+    row: f32,
+}
+
+impl PanelMetrics {
+    fn new(font_size: f32) -> Self {
+        let line = (font_size * 1.6).round();
+        let small = (font_size * 1.4).round();
+        Self {
+            clock: (font_size * 3.4).round(),
+            line,
+            small,
+            header: (font_size * 2.3).round(),
+            row: ROW_PAD * 2.0 + small * 2.0 + line,
+        }
+    }
+
+    fn content_height(&self, n: usize) -> f32 {
+        if n == 0 {
+            EMPTY_HEIGHT
+        } else {
+            n as f32 * self.row + (n - 1) as f32 * ROW_GAP
+        }
+    }
+
+    fn list_height(&self, n: usize) -> f32 {
+        self.content_height(n).min(LIST_MAX)
+    }
+
+    fn max_scroll(&self, n: usize) -> f32 {
+        (self.content_height(n) - self.list_height(n)).max(0.0)
+    }
+
+    /// The whole panel's height; [`Bar::paint_panel`] lays out the same sum.
+    fn height(&self, n: usize) -> u32 {
+        let sum = PANEL_TOP
+            + self.clock
+            + self.line
+            + PANEL_GAP
+            + 1.0
+            + PANEL_GAP_SMALL
+            + self.header
+            + PANEL_GAP_SMALL
+            + self.list_height(n)
+            + PANEL_BOTTOM;
+        sum.ceil() as u32
+    }
+}
+
+/// How long ago a notification arrived, as the panel says it.
+fn ago(arrived: i64, now: i64) -> String {
+    match now - arrived {
+        s if s < 60 => "now".into(),
+        s if s < 3600 => format!("{} min ago", s / 60),
+        s if s < 86_400 => format!("{} h ago", s / 3600),
+        _ => chrono::DateTime::from_timestamp(arrived, 0)
+            .map(|t| t.with_timezone(&chrono::Local).format("%d %b").to_string())
+            .unwrap_or_default(),
+    }
+}
+
+/// Text on one line: a body's line breaks and runs of spaces become one space.
+fn flatten(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 struct Segment {
     module: Module,
     text: String,
@@ -142,6 +284,15 @@ struct Bar {
     /// version that has `open_quick_settings`: the fallback for a click when
     /// Raven Settings or Raven Power is not installed. None on an older Huginn.
     shell: Option<RavenShellManagerV1>,
+    /// Kept to make the clock panel's surface when it opens.
+    compositor: CompositorState,
+    layer_shell: LayerShell,
+    qh: QueueHandle<Bar>,
+    /// Open while the clock has been clicked.
+    panel: Option<Panel>,
+    centre: notifications::Centre,
+    /// Huginn's notifications, newest first, as the centre last sent them.
+    notes: Vec<notifications::Entry>,
     pointer: Option<wl_pointer::WlPointer>,
     loop_handle: calloop::LoopHandle<'static, Bar>,
     wake_token: Option<calloop::RegistrationToken>,
@@ -171,6 +322,8 @@ struct Bar {
     eco: bool,
     clock: String,
     date: String,
+    /// The date as the clock panel spells it out: "Monday 15 September".
+    long_date: String,
     last_slow_poll: Instant,
     /// Mtime of the config file as of the last read, so the slow poll can
     /// tell an edit from a file that has not moved.
@@ -444,6 +597,17 @@ fn main() {
     }
     let debug = std::env::var_os("ROOSTBAR_DEBUG").is_some();
 
+    let (notes_tx, notes_rx) = calloop::channel::channel::<Vec<notifications::Entry>>();
+    event_loop
+        .handle()
+        .insert_source(notes_rx, |event, _, bar: &mut Bar| {
+            if let calloop::channel::Event::Msg(notes) = event {
+                bar.notes_changed(notes);
+            }
+        })
+        .expect("roostbar: notifications source");
+    let centre = notifications::Centre::start(notes_tx);
+
     let mut bar = Bar {
         registry_state: RegistryState::new(&globals),
         seat_state: SeatState::new(&globals, &qh),
@@ -452,6 +616,12 @@ fn main() {
         pool,
         layer,
         shell,
+        compositor,
+        layer_shell,
+        qh: qh.clone(),
+        panel: None,
+        centre,
+        notes: Vec::new(),
         pointer: None,
         loop_handle: event_loop.handle(),
         wake_token: None,
@@ -477,6 +647,7 @@ fn main() {
         eco: false,
         clock: String::new(),
         date: String::new(),
+        long_date: String::new(),
         last_slow_poll: Instant::now() - Duration::from_secs(60),
         cfg_mtime,
         cfg,
@@ -493,6 +664,7 @@ fn main() {
                 bar.refresh_slow();
             }
             bar.draw();
+            bar.draw_panel();
             // Align to the next whole second so the clock flips on time.
             let now = chrono::Local::now();
             let ms = now.timestamp_subsec_millis() as u64;
@@ -597,6 +769,14 @@ impl Bar {
         let now = chrono::Local::now();
         let clock = now.format(&self.cfg.clock_format).to_string();
         let date = now.format(&self.cfg.date_format).to_string();
+        let long_date = now.format("%A %-d %B").to_string();
+        if clock != self.clock || long_date != self.long_date {
+            // The panel's clock, and each notification's "5 min ago".
+            if let Some(panel) = &mut self.panel {
+                panel.dirty = true;
+            }
+            self.long_date = long_date;
+        }
         let volume = self.audio.get();
         if clock != self.clock || date != self.date || volume != self.volume {
             if self.debug && volume != self.volume {
@@ -776,7 +956,7 @@ impl Bar {
                 return;
             }
         };
-        let mut canvas = Canvas { buf: canvas_buf, width: pw, height: ph };
+        let mut canvas = Canvas::new(canvas_buf, pw, ph);
         canvas.fill(self.colors.bg);
 
         // The hairline on the edge that faces the desktop: the bar is a
@@ -823,6 +1003,11 @@ impl Bar {
     }
 
     fn click(&mut self, module: Module, button: u32) {
+        // The bar is outside the panel too. The clock opens and closes it
+        // itself, below.
+        if module != Module::Clock {
+            self.panel = None;
+        }
         match (module, button) {
             (Module::Volume, BTN_LEFT) | (Module::Volume, BTN_MIDDLE) => self.audio.toggle_mute(),
             (Module::Wifi, BTN_LEFT) => self.open_settings("network"),
@@ -835,7 +1020,8 @@ impl Bar {
                 }
             }
             (Module::Bluetooth, BTN_RIGHT) => self.bt.toggle_power(),
-            (Module::Date, BTN_LEFT) | (Module::Clock, BTN_LEFT) => self.open_settings("datetime"),
+            (Module::Date, BTN_LEFT) => self.open_settings("datetime"),
+            (Module::Clock, BTN_LEFT) => self.toggle_panel(),
             (Module::Battery, BTN_LEFT) => {
                 if !launch("raven-power", &[]) {
                     self.open_quick_settings();
@@ -864,6 +1050,268 @@ impl Bar {
         }
     }
 
+    /// Height, logical, the clock panel needs for what it lists now.
+    fn panel_height(&self) -> u32 {
+        PanelMetrics::new(self.cfg.font_size).height(self.notes.len())
+    }
+
+    /// Open the clock panel, or close it if it is open.
+    fn toggle_panel(&mut self) {
+        // Dropping the layer surface destroys it.
+        if self.panel.take().is_some() {
+            return;
+        }
+        let height = self.panel_height();
+        let pools = SlotPool::new((PANEL_WIDTH * height * 4) as usize, &self.shm)
+            .and_then(|pool| Ok((pool, SlotPool::new(4096, &self.shm)?)));
+        let (pool, catcher_pool) = match pools {
+            Ok(pools) => pools,
+            Err(e) => {
+                eprintln!("roostbar: panel pool: {e}");
+                return;
+            }
+        };
+
+        // The catcher first, and the panel a layer above it, so the panel
+        // is never under the surface that closes it.
+        let surface = self.compositor.create_surface(&self.qh);
+        let catcher = self.layer_shell.create_layer_surface(&self.qh, surface, Layer::Top, Some("roostbar-panel-outside"), None);
+        catcher.set_anchor(Anchor::TOP | Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT);
+        catcher.set_size(0, 0);
+        catcher.set_exclusive_zone(0);
+        catcher.set_keyboard_interactivity(KeyboardInteractivity::None);
+        catcher.commit();
+
+        let surface = self.compositor.create_surface(&self.qh);
+        let layer = self.layer_shell.create_layer_surface(&self.qh, surface, Layer::Overlay, Some("roostbar-panel"), None);
+        // Under the clock: the bar's corner, on whichever edge it is on.
+        // Exclusive zone 0 keeps the panel out of the bar's own zone.
+        let edge = if self.cfg.position == "bottom" { Anchor::BOTTOM } else { Anchor::TOP };
+        layer.set_anchor(edge | Anchor::RIGHT);
+        layer.set_margin(PANEL_MARGIN, PANEL_MARGIN, PANEL_MARGIN, PANEL_MARGIN);
+        layer.set_size(PANEL_WIDTH, height);
+        layer.set_exclusive_zone(0);
+        layer.set_keyboard_interactivity(KeyboardInteractivity::None);
+        layer.commit();
+        self.panel = Some(Panel {
+            layer,
+            pool,
+            catcher,
+            catcher_pool,
+            requested: height,
+            width: 0,
+            height: 0,
+            scale: self.scale,
+            configured: false,
+            dirty: true,
+            pointer: None,
+            rows: Vec::new(),
+            hits: Vec::new(),
+            scroll: 0.0,
+        });
+        // What the thread last sent may predate a Huginn restart.
+        self.centre.refresh();
+    }
+
+    /// The centre sent a new list.
+    fn notes_changed(&mut self, notes: Vec<notifications::Entry>) {
+        if notes == self.notes {
+            return;
+        }
+        self.notes = notes;
+        let max = PanelMetrics::new(self.cfg.font_size).max_scroll(self.notes.len());
+        if let Some(panel) = &mut self.panel {
+            panel.scroll = panel.scroll.min(max);
+            panel.dirty = true;
+        }
+        self.draw_panel();
+    }
+
+    /// Resize the panel if what it lists needs a different height, else draw
+    /// it if anything changed. A resize is drawn when the compositor answers.
+    fn draw_panel(&mut self) {
+        let want = self.panel_height();
+        let Some(mut panel) = self.panel.take() else { return };
+        if panel.requested != want {
+            panel.requested = want;
+            panel.layer.set_size(PANEL_WIDTH, want);
+            panel.layer.commit();
+        } else if panel.configured && panel.dirty && panel.width != 0 {
+            panel.dirty = false;
+            self.paint_panel(&mut panel);
+        }
+        self.panel = Some(panel);
+    }
+
+    fn paint_panel(&self, panel: &mut Panel) {
+        let s = panel.scale as f32;
+        let pw = panel.width * panel.scale as u32;
+        let ph = panel.height * panel.scale as u32;
+        let (buffer, buf) = match panel.pool.create_buffer(pw as i32, ph as i32, pw as i32 * 4, wl_shm::Format::Argb8888) {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!("roostbar: panel buffer: {e}");
+                return;
+            }
+        };
+        let c = &self.colors;
+        let m = PanelMetrics::new(self.cfg.font_size);
+        let pointer = panel.pointer.map(|(x, y)| (x as f32 * s, y as f32 * s));
+        let over = |r: [f32; 4]| pointer.is_some_and(|(x, y)| x >= r[0] && x < r[0] + r[2] && y >= r[1] && y < r[1] + r[3]);
+
+        let mut canvas = Canvas::new(buf, pw, ph);
+        canvas.fill([0, 0, 0, 0]);
+        canvas.fill_rounded(0.0, 0.0, pw as f32, ph as f32, PANEL_RADIUS * s, c.bg);
+
+        let base = self.text.with_scale(s);
+        let big = self.text.with_scale(s * 2.4);
+        let small = self.text.with_scale(s * 0.88);
+        let pad = PANEL_PAD * s;
+        let right = pw as f32 - pad;
+        let mut rows = Vec::new();
+        let mut hits = Vec::new();
+
+        // The time, and the date in words.
+        let mut y = PANEL_TOP * s;
+        self.text.draw_line(&mut canvas, &self.clock, pad, y, m.clock * s, big, c.fg);
+        y += m.clock * s;
+        self.text.draw_line(&mut canvas, &self.long_date, pad, y, m.line * s, base, c.muted);
+        y += (m.line + PANEL_GAP) * s;
+        canvas.fill_rect(pad as i32, y as i32, (right - pad) as i32, s as i32, HAIRLINE);
+        y += (1.0 + PANEL_GAP_SMALL) * s;
+
+        // "Notifications", and "Clear all" when there is anything to clear.
+        self.text.draw_line(&mut canvas, "Notifications", pad, y, m.header * s, base, c.fg);
+        if !self.notes.is_empty() {
+            let label = "Clear all";
+            let w = self.text.width(label, small);
+            let inset = 8.0 * s;
+            let rect = [right - w - inset, y + 3.0 * s, w + inset * 2.0, (m.header - 6.0) * s];
+            let hovered = over(rect);
+            if hovered {
+                canvas.fill_rounded(rect[0], rect[1], rect[2], rect[3], rect[3] / 2.0, HOVER_PILL);
+            }
+            self.text.draw_line(&mut canvas, label, right - w, y, m.header * s, small, if hovered { c.fg } else { c.muted });
+            hits.push((rect, PanelHit::Clear));
+        }
+        y += (m.header + PANEL_GAP_SMALL) * s;
+
+        let list_top = y;
+        let list_bottom = list_top + m.list_height(self.notes.len()) * s;
+        if self.notes.is_empty() {
+            let w = self.text.width(EMPTY_TEXT, base);
+            self.text.draw_line(&mut canvas, EMPTY_TEXT, (pw as f32 - w) / 2.0, list_top, list_bottom - list_top, base, c.muted);
+        } else {
+            canvas.clip = Some((list_top as i32, list_bottom.ceil() as i32));
+            let now = chrono::Local::now().timestamp();
+            let close = 24.0 * s;
+            let text_x = pad + 14.0 * s;
+            let text_w = right - text_x - close - 10.0 * s;
+            for (i, note) in self.notes.iter().enumerate() {
+                let top = list_top + (i as f32 * (m.row + ROW_GAP) - panel.scroll) * s;
+                let h = m.row * s;
+                if top + h <= list_top || top >= list_bottom {
+                    continue;
+                }
+                let shown_top = top.max(list_top);
+                let shown = [pad, shown_top, right - pad, (top + h).min(list_bottom) - shown_top];
+                let row_hovered = over(shown);
+                canvas.fill_rounded(pad, top, right - pad, h, ROW_RADIUS * s, if row_hovered { ROW_HOVER } else { ROW_FILL });
+                rows.push(shown);
+
+                let mut ly = top + ROW_PAD * s;
+                if note.open {
+                    // Still open in Huginn, not yet only history.
+                    let d = 6.0 * s;
+                    canvas.fill_rounded(pad + 5.0 * s, ly + (m.small * s - d) / 2.0, d, d, d / 2.0, c.accent);
+                }
+                let when = ago(note.arrived, now);
+                let head = if note.app_name.is_empty() { when } else { format!("{} · {when}", note.app_name) };
+                self.text.draw_line(&mut canvas, &self.text.ellipsize(&head, text_w, small), text_x, ly, m.small * s, small, c.muted);
+                ly += m.small * s;
+                let summary = self.text.ellipsize(&flatten(&note.summary), text_w, base);
+                self.text.draw_line(&mut canvas, &summary, text_x, ly, m.line * s, base, c.fg);
+                ly += m.line * s;
+                let body = flatten(&note.body);
+                if !body.is_empty() {
+                    let body = self.text.ellipsize(&body, text_w, small);
+                    self.text.draw_line(&mut canvas, &body, text_x, ly, m.small * s, small, c.muted);
+                }
+
+                // The remove control, top right of the row.
+                let rect = [right - close - 6.0 * s, top + (ROW_PAD - 2.0) * s, close, close];
+                let clickable = rect[1] >= list_top && rect[1] + rect[3] <= list_bottom;
+                let hovered = clickable && over(rect);
+                if hovered {
+                    canvas.fill_rounded(rect[0], rect[1], rect[2], rect[3], close / 2.0, HOVER_PILL);
+                }
+                let glyph = "󰅖";
+                let gw = self.text.width(glyph, base);
+                let color = if hovered { c.fg } else { c.muted };
+                self.text.draw_line(&mut canvas, glyph, rect[0] + (close - gw) / 2.0, rect[1], close, base, color);
+                if clickable {
+                    hits.push((rect, PanelHit::Remove(note.id)));
+                }
+            }
+        }
+        panel.rows = rows;
+        panel.hits = hits;
+
+        let surface = panel.layer.wl_surface();
+        surface.set_buffer_scale(panel.scale);
+        surface.damage_buffer(0, 0, pw as i32, ph as i32);
+        if let Err(e) = buffer.attach_to(surface) {
+            eprintln!("roostbar: panel attach: {e}");
+        }
+        panel.layer.commit();
+    }
+
+    /// A pointer event on the clock panel.
+    fn panel_pointer(&mut self, ev: &PointerEvent) {
+        let m = PanelMetrics::new(self.cfg.font_size);
+        let Some(panel) = &mut self.panel else { return };
+        let before = panel.hover();
+        match ev.kind {
+            PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => panel.pointer = Some(ev.position),
+            PointerEventKind::Leave { .. } => panel.pointer = None,
+            PointerEventKind::Press { button: BTN_LEFT, .. } => {
+                // Gone from the panel at once; the centre's next list agrees.
+                match before.1.map(|i| panel.hits[i].1) {
+                    Some(PanelHit::Remove(id)) => {
+                        self.centre.remove(id);
+                        self.notes.retain(|n| n.id != id);
+                    }
+                    Some(PanelHit::Clear) => {
+                        self.centre.clear();
+                        self.notes.clear();
+                    }
+                    None => {}
+                }
+                panel.scroll = panel.scroll.min(m.max_scroll(self.notes.len()));
+                panel.dirty = true;
+            }
+            PointerEventKind::Axis { vertical, .. } => {
+                let delta = if vertical.value120 != 0 {
+                    vertical.value120 as f32 / 120.0 * SCROLL_NOTCH
+                } else if vertical.discrete != 0 {
+                    vertical.discrete as f32 * SCROLL_NOTCH
+                } else {
+                    vertical.absolute as f32
+                };
+                let next = (panel.scroll + delta).clamp(0.0, m.max_scroll(self.notes.len()));
+                if next != panel.scroll {
+                    panel.scroll = next;
+                    panel.dirty = true;
+                }
+            }
+            _ => {}
+        }
+        if panel.hover() != before {
+            panel.dirty = true;
+        }
+        self.draw_panel();
+    }
+
     fn scroll(&mut self, module: Module, notches: i64) {
         if module == Module::Volume && notches != 0 {
             self.audio.adjust(-notches * self.cfg.volume_step);
@@ -875,7 +1323,19 @@ impl Bar {
 }
 
 impl CompositorHandler for Bar {
-    fn scale_factor_changed(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_surface::WlSurface, new_factor: i32) {
+    fn scale_factor_changed(&mut self, _: &Connection, _: &QueueHandle<Self>, surface: &wl_surface::WlSurface, new_factor: i32) {
+        // Nothing to see on the catcher, so its buffer stays at scale 1.
+        if self.panel.as_ref().is_some_and(|p| p.catcher.wl_surface() == surface) {
+            return;
+        }
+        if let Some(panel) = self.panel.as_mut().filter(|p| p.layer.wl_surface() == surface) {
+            if panel.scale != new_factor {
+                panel.scale = new_factor;
+                panel.dirty = true;
+                self.draw_panel();
+            }
+            return;
+        }
         if new_factor != self.scale {
             self.scale = new_factor;
             self.dirty = true;
@@ -898,10 +1358,44 @@ impl OutputHandler for Bar {
 }
 
 impl LayerShellHandler for Bar {
-    fn closed(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &LayerSurface) {
+    fn closed(&mut self, _: &Connection, _: &QueueHandle<Self>, layer: &LayerSurface) {
+        let s = layer.wl_surface();
+        if self.panel.as_ref().is_some_and(|p| p.layer.wl_surface() == s || p.catcher.wl_surface() == s) {
+            self.panel = None;
+            return;
+        }
         self.exit = true;
     }
-    fn configure(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &LayerSurface, configure: LayerSurfaceConfigure, _: u32) {
+    fn configure(&mut self, _: &Connection, _: &QueueHandle<Self>, layer: &LayerSurface, configure: LayerSurfaceConfigure, _: u32) {
+        if let Some(panel) = self.panel.as_mut().filter(|p| p.catcher.wl_surface() == layer.wl_surface()) {
+            // Fully transparent, but a buffer the size of the screen: a
+            // surface only takes input where it has one.
+            let (w, h) = configure.new_size;
+            let (w, h) = (w.max(1) as i32, h.max(1) as i32);
+            match panel.catcher_pool.create_buffer(w, h, w * 4, wl_shm::Format::Argb8888) {
+                Ok((buffer, buf)) => {
+                    buf.fill(0);
+                    let surface = panel.catcher.wl_surface();
+                    surface.set_buffer_scale(1);
+                    surface.damage_buffer(0, 0, w, h);
+                    if let Err(e) = buffer.attach_to(surface) {
+                        eprintln!("roostbar: catcher attach: {e}");
+                    }
+                    panel.catcher.commit();
+                }
+                Err(e) => eprintln!("roostbar: catcher buffer: {e}"),
+            }
+            return;
+        }
+        if let Some(panel) = self.panel.as_mut().filter(|p| p.layer.wl_surface() == layer.wl_surface()) {
+            let (w, h) = configure.new_size;
+            panel.width = if w == 0 { PANEL_WIDTH } else { w };
+            panel.height = if h == 0 { panel.requested } else { h };
+            panel.configured = true;
+            panel.dirty = true;
+            self.draw_panel();
+            return;
+        }
         let (w, h) = configure.new_size;
         self.width = if w == 0 { 1920 } else { w };
         if h != 0 {
@@ -939,6 +1433,17 @@ impl SeatHandler for Bar {
 impl PointerHandler for Bar {
     fn pointer_frame(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_pointer::WlPointer, events: &[PointerEvent]) {
         for ev in events {
+            if self.panel.as_ref().is_some_and(|p| ev.surface == *p.layer.wl_surface()) {
+                self.panel_pointer(ev);
+                continue;
+            }
+            if self.panel.as_ref().is_some_and(|p| ev.surface == *p.catcher.wl_surface()) {
+                // A press outside the panel closes it, and goes no further.
+                if matches!(ev.kind, PointerEventKind::Press { .. }) {
+                    self.panel = None;
+                }
+                continue;
+            }
             if ev.surface != *self.layer.wl_surface() {
                 continue;
             }

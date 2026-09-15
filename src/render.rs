@@ -4,9 +4,16 @@ pub struct Canvas<'a> {
     pub buf: &'a mut [u8],
     pub width: u32,
     pub height: u32,
+    /// Rows outside `start..end` are left untouched: the clock panel's list
+    /// scrolls under the header rather than over it.
+    pub clip: Option<(i32, i32)>,
 }
 
 impl<'a> Canvas<'a> {
+    pub fn new(buf: &'a mut [u8], width: u32, height: u32) -> Self {
+        Self { buf, width, height, clip: None }
+    }
+
     pub fn fill(&mut self, argb: [u8; 4]) {
         let [a, r, g, b] = argb;
         let px = premul(a, r, g, b);
@@ -18,6 +25,9 @@ impl<'a> Canvas<'a> {
     #[inline]
     fn blend(&mut self, x: i32, y: i32, argb: [u8; 4], cov: f32) {
         if x < 0 || y < 0 || x >= self.width as i32 || y >= self.height as i32 {
+            return;
+        }
+        if self.clip.is_some_and(|(start, end)| y < start || y >= end) {
             return;
         }
         let a = (argb[0] as f32 / 255.0) * cov;
@@ -33,9 +43,7 @@ impl<'a> Canvas<'a> {
         }
     }
 
-    /// Kept beside `fill_rounded` for a square-cornered fill; nothing in the
-    /// bar draws one today.
-    #[allow(dead_code)]
+    /// A square-cornered fill: the rule under the clock panel's date.
     pub fn fill_rect(&mut self, x: i32, y: i32, w: i32, h: i32, argb: [u8; 4]) {
         for yy in y..y + h {
             for xx in x..x + w {
@@ -175,13 +183,46 @@ impl Text {
         self.walk(s, scale, |_, _, _| {})
     }
 
+    /// `s` cut to fit `max` pixels, ending in an ellipsis when it had to be.
+    pub fn ellipsize(&self, s: &str, max: f32, scale: PxScale) -> String {
+        if self.width(s, scale) <= max {
+            return s.to_string();
+        }
+        let mut cut: String = s.to_string();
+        while !cut.is_empty() {
+            cut.pop();
+            let candidate = format!("{}…", cut.trim_end());
+            if self.width(&candidate, scale) <= max {
+                return candidate;
+            }
+        }
+        String::new()
+    }
+
     /// Draw `s` with its left edge at `x`, vertically centred in the canvas
     /// on the UI face's metrics, so a line of text sits where it would in
     /// any other Raven panel and the icons fall in beside it.
     pub fn draw(&self, canvas: &mut Canvas, s: &str, x: f32, scale: PxScale, color: [u8; 4]) -> f32 {
+        let height = canvas.height as f32;
+        self.draw_line(canvas, s, x, 0.0, height, scale, color)
+    }
+
+    /// Draw `s` with its left edge at `x`, vertically centred in the band
+    /// `top..top + height` the same way [`Text::draw`] centres it in the bar.
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_line(
+        &self,
+        canvas: &mut Canvas,
+        s: &str,
+        x: f32,
+        top: f32,
+        height: f32,
+        scale: PxScale,
+        color: [u8; 4],
+    ) -> f32 {
         let metrics = self.font(Face::Ui).as_scaled(scale);
         let text_h = metrics.ascent() - metrics.descent();
-        let baseline = ((canvas.height as f32 - text_h) / 2.0 + metrics.ascent()).round();
+        let baseline = (top + (height - text_h) / 2.0 + metrics.ascent()).round();
         self.walk(s, scale, |face, id, cx| {
             let font = self.font(face);
             let glyph = id.with_scale_and_position(scale, point(x + cx, baseline));
