@@ -23,15 +23,19 @@ changes).
 |------------|---------------|-----------------------------------------------------|
 | Volume     | scroll        | ±5 % (`volume_step`)                                |
 | Volume     | click         | toggle mute                                         |
-| Bluetooth  | left click    | connected → disconnect; off → power on; idle → connect to `bluetooth_device` (pairing it first if it never has been), else a trusted paired device; nothing paired and no MAC → open Huginn's quick settings, which has the device list |
-| Bluetooth  | middle/right  | toggle adapter power                                |
-| Battery    | left click    | open Huginn's quick settings (brightness, power, ...) |
+| Wi‑Fi      | left click    | open Settings → Network (`raven-settings --page network`) |
+| Bluetooth  | left click    | open Settings → Bluetooth                           |
+| Bluetooth  | middle click  | connected → disconnect; off → power on; idle → connect to `bluetooth_device` (pairing it first if it never has been), else a trusted paired device; nothing paired and no MAC → open Settings → Bluetooth, which has the device list |
+| Bluetooth  | right click   | toggle adapter power                                |
+| Battery    | left click    | open Raven Power (`raven-power`)                    |
+| Clock/date | left click    | open Settings → Date & Time                         |
 
-The battery click goes through `raven_shell_manager_v1.open_quick_settings`
-(RoostBar carries its own copy of the protocol in `protocols/`), so the bar
-never draws a panel of its own: the compositor opens the same one the
-keybinding does. On a Huginn too old to offer version 2 of the global the
-click does nothing and the bar says so once at startup.
+The bar never draws a panel of its own; it starts the app that has one,
+detached, in its own process group. If `raven-settings` or `raven-power` is
+not installed the click falls back to Huginn's quick settings through
+`raven_shell_manager_v1.open_quick_settings` (RoostBar carries its own copy
+of the protocol in `protocols/`). On a Huginn too old to offer version 2 of
+that global there is no fallback, and the bar says so once at startup.
 
 Huginn's keybindings are hardcoded and don't include volume keys, so there is
 a CLI that uses the same backend as the bar:
@@ -74,11 +78,11 @@ sudo cp contrib/bluetoothd.toml /etc/raven/init.d/
 sudo raven-rc reload && sudo raven-rc start bluetoothd
 ```
 
-Pairing needs a device list, and the bar does not draw one: Huginn's quick
-settings (click the battery, or the keybinding) has a Bluetooth row that
-scans, pairs and connects. Two ways that need no panel at all:
+Pairing needs a device list, and the bar does not draw one: Settings'
+Bluetooth page (click the icon) scans, pairs and connects. Two ways that
+need no panel at all:
 
-- Put the device's MAC in `bluetooth_device` and click the icon. The bar
+- Put the device's MAC in `bluetooth_device` and middle-click the icon. The bar
   scans for that address for up to 30 s, pairs it ("just works" — the bar
   cannot type a PIN, so an old keyboard that wants one needs the panel),
   marks it trusted and connects. The icon reads `scanning for …`,

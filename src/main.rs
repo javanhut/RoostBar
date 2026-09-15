@@ -113,13 +113,7 @@ enum Module {
 impl Module {
     /// Whether a click does something here; see [`Bar::click`].
     fn clickable(self) -> bool {
-        matches!(self, Self::Volume | Self::Bluetooth | Self::Battery)
-    }
-
-    /// Whether the module reacts to the pointer at all — a click or a
-    /// scroll — and so should brighten under it.
-    fn responds(self) -> bool {
-        self.clickable() || matches!(self, Self::Wifi)
+        matches!(self, Self::Date | Self::Wifi | Self::Volume | Self::Bluetooth | Self::Battery | Self::Clock)
     }
 }
 
@@ -145,8 +139,8 @@ struct Bar {
     pool: SlotPool,
     layer: LayerSurface,
     /// Huginn's shell protocol, bound only when the compositor speaks the
-    /// version that has `open_quick_settings`. None on an older Huginn, in
-    /// which case a click on the battery does nothing.
+    /// version that has `open_quick_settings`: the fallback for a click when
+    /// Raven Settings or Raven Power is not installed. None on an older Huginn.
     shell: Option<RavenShellManagerV1>,
     pointer: Option<wl_pointer::WlPointer>,
     loop_handle: calloop::LoopHandle<'static, Bar>,
@@ -225,6 +219,32 @@ fn which(bin: &str) -> bool {
     std::env::var_os("PATH")
         .map(|p| std::env::split_paths(&p).any(|d| d.join(bin).is_file()))
         .unwrap_or(false)
+}
+
+/// Start a desktop app detached from the bar: its own process group, so it
+/// outlives a bar restart, and no stdio, so its logging stays out of ours.
+/// False when it could not be started at all (not installed).
+fn launch(bin: &str, args: &[&str]) -> bool {
+    use std::os::unix::process::CommandExt;
+    use std::process::{Command, Stdio};
+    let spawned = Command::new(bin)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .process_group(0)
+        .spawn();
+    match spawned {
+        Ok(mut child) => {
+            // Reap it when it exits, or every closed window leaves a zombie.
+            std::thread::spawn(move || child.wait());
+            true
+        }
+        Err(e) => {
+            eprintln!("roostbar: could not start {bin}: {e}");
+            false
+        }
+    }
 }
 
 /// Raven has no systemd user session, so nothing starts PipeWire for us.
@@ -395,7 +415,7 @@ fn main() {
     // only offers 1 cannot take the request, so it is the same as no global.
     let shell: Option<RavenShellManagerV1> = globals.bind(&qh, 2..=2, ()).ok();
     if shell.is_none() {
-        eprintln!("roostbar: compositor has no raven_shell_manager_v1 v2; battery click will not open quick settings");
+        eprintln!("roostbar: compositor has no raven_shell_manager_v1 v2; no quick-settings fallback if Settings or Raven Power is missing");
     }
 
     let surface = compositor.create_surface(&qh);
@@ -779,7 +799,7 @@ impl Bar {
             }
             // A muted module brightens under the pointer, so a hover says
             // "this responds" even where there is no pill.
-            let color = if hovered && seg.module.responds() && seg.color == self.colors.muted {
+            let color = if hovered && seg.module.clickable() && seg.color == self.colors.muted {
                 self.colors.fg
             } else {
                 seg.color
@@ -805,19 +825,20 @@ impl Bar {
     fn click(&mut self, module: Module, button: u32) {
         match (module, button) {
             (Module::Volume, BTN_LEFT) | (Module::Volume, BTN_MIDDLE) => self.audio.toggle_mute(),
-            (Module::Bluetooth, BTN_LEFT) => {
+            (Module::Wifi, BTN_LEFT) => self.open_settings("network"),
+            (Module::Bluetooth, BTN_LEFT) => self.open_settings("bluetooth"),
+            (Module::Bluetooth, BTN_MIDDLE) => {
                 // Nothing paired and no MAC configured: the bar has no list
-                // to offer, but the compositor's panel does.
+                // to offer, but the Bluetooth page does.
                 if !self.bt.primary_action(self.cfg.bluetooth_device.clone()) {
-                    if let Some(shell) = &self.shell {
-                        shell.open_quick_settings();
-                    }
+                    self.open_settings("bluetooth");
                 }
             }
-            (Module::Bluetooth, BTN_MIDDLE) | (Module::Bluetooth, BTN_RIGHT) => self.bt.toggle_power(),
+            (Module::Bluetooth, BTN_RIGHT) => self.bt.toggle_power(),
+            (Module::Date, BTN_LEFT) | (Module::Clock, BTN_LEFT) => self.open_settings("datetime"),
             (Module::Battery, BTN_LEFT) => {
-                if let Some(shell) = &self.shell {
-                    shell.open_quick_settings();
+                if !launch("raven-power", &[]) {
+                    self.open_quick_settings();
                 }
             }
             _ => {}
@@ -827,6 +848,20 @@ impl Bar {
         self.refresh_fast();
         self.dirty = true;
         self.draw();
+    }
+
+    /// Raven Settings on one page; Huginn's quick settings if Settings is
+    /// not installed.
+    fn open_settings(&self, page: &str) {
+        if !launch("raven-settings", &["--page", page]) {
+            self.open_quick_settings();
+        }
+    }
+
+    fn open_quick_settings(&self) {
+        if let Some(shell) = &self.shell {
+            shell.open_quick_settings();
+        }
     }
 
     fn scroll(&mut self, module: Module, notches: i64) {

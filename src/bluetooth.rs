@@ -279,7 +279,7 @@ impl Bluetooth {
         }
     }
 
-    /// Left click: connected -> disconnect; off -> power on; idle -> connect
+    /// Middle click: connected -> disconnect; off -> power on; idle -> connect
     /// to the preferred device (config MAC, else a trusted paired one, else
     /// any paired one), pairing the config MAC first if it never has been.
     ///
