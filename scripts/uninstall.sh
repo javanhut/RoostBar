@@ -82,7 +82,10 @@ if [ "$PACKAGES" = 1 ]; then
         if [ -n "$installed" ]; then
             echo "Raven Linux: uninstalling$installed"
             # shellcheck disable=SC2086
-            sudo rvn uninstall -y $installed
+            # --remove-orphans: the dependencies these pulled in go too, which
+            # is what --packages asks for. rvn refuses that sweep under -y
+            # without it, and never takes a held package either way.
+            sudo rvn uninstall -y --remove-orphans $installed
         fi
     else
         echo "--packages is only automated on Raven Linux (ID=${OS_ID:-unknown}); remove pipewire-audio wireplumber pipewire-pulse bluez yourself"
