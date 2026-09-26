@@ -13,11 +13,12 @@ font_size = 13.5
 
 # #RRGGBB or #AARRGGBB. The defaults are the Raven Glass material the dock
 # and launcher are drawn in: 85% opaque Raven dark, Raven's body and
-# secondary text colours. Raven Settings rewrites these when the theme changes.
+# secondary text colours. Raven Settings rewrites these when the theme changes;
+# any left out follow the theme and accent in ~/.config/raven/desktop.toml.
 background = "#D816161F"
 foreground = "#E8E8F0"
 accent = "#7AA2F7"
-muted = "#9A9AB0"
+muted = "#ABABC2"
 warning = "#F7768E"
 charging = ""             # battery reading while plugged in; empty = accent
 

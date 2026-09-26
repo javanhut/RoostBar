@@ -325,9 +325,10 @@ struct Bar {
     /// The date as the clock panel spells it out: "Monday 15 September".
     long_date: String,
     last_slow_poll: Instant,
-    /// Mtime of the config file as of the last read, so the slow poll can
-    /// tell an edit from a file that has not moved.
-    cfg_mtime: Option<SystemTime>,
+    /// Mtimes of the config file and of desktop.toml (whose theme fills
+    /// any colour the config leaves out) as of the last read, so the slow
+    /// poll can tell an edit from files that have not moved.
+    cfg_mtime: (Option<SystemTime>, Option<SystemTime>),
 }
 
 struct Colors {
@@ -799,7 +800,8 @@ impl Bar {
     /// clock format or the bar's edge changes, and until this the bar wore
     /// the version it was started with until someone restarted it by hand.
     /// A stat every slow poll is cheaper than a watch and cannot miss a
-    /// rename, which is how the file is written.
+    /// rename, which is how the file is written. desktop.toml is stat'd too,
+    /// for the colours a hand-written config leaves to the desktop theme.
     fn reload_config(&mut self) {
         let mtime = Config::mtime();
         if mtime == self.cfg_mtime {
