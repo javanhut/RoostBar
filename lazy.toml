@@ -36,10 +36,17 @@ run = ["echo Hello from imlazy!"]
 # run.darwin = ["go build -o app"]
 # run.windows = ["go build -o app.exe"]
 
+[commands.add-permissions]
+desc = "Add permissions"
+escalate = true
+run = ["chmod +x scripts/install.sh", "chmod +x scripts/uninstall.sh"]
+
 [commands.install]
+dep = ["add-permissions"]
 desc = "Runs install script"
 run = ["./scripts/install.sh"]
 
 [commands.uninstall]
+dep = ["add-permissons"]
 desc = "Runs uninstall script"
 run = ["./scripts/uninstall.sh"]
