@@ -1,6 +1,7 @@
 mod audio;
 mod bluetooth;
 mod config;
+mod glass_tint;
 mod notifications;
 #[cfg(feature = "pipewire-native")]
 mod pipewire_audio;
@@ -10,6 +11,7 @@ mod pipewire_cli;
 use pipewire_cli as pipewire_audio;
 mod raven_shell;
 mod render;
+mod single;
 mod system;
 
 use std::io::Read;
@@ -549,6 +551,13 @@ fn main() {
         let rest: Vec<String> = std::env::args().skip(2).collect();
         std::process::exit(bluetooth::cli(&rest, &cfg.bluetooth_device));
     }
+    // One bar at a time: give way to a running one, or with --replace take
+    // over from it. The lock is held until this one exits.
+    let replace = std::env::args().any(|a| a == "--replace");
+    let Some(_single) = single::take_over(replace) else {
+        eprintln!("roostbar: a bar is already running (use --replace to take over)");
+        return;
+    };
     if cfg.start_pipewire {
         spawn_pipewire();
     }

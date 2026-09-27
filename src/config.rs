@@ -129,7 +129,9 @@ impl Config {
                 .entry(key)
                 .or_insert_with(|| toml::Value::String(value));
         }
-        table.try_into()
+        let mut cfg: Self = table.try_into()?;
+        desktop.tint(&mut cfg);
+        Ok(cfg)
     }
 
     fn from_desktop(desktop: &Desktop) -> Self {
@@ -138,8 +140,8 @@ impl Config {
 }
 
 /// The slice of `~/.config/raven/desktop.toml` the bar falls back on for its
-/// colours: theme mode, accent and transparency. Settings owns the file;
-/// every key is optional and a parse error means the defaults.
+/// colours: theme mode, accent, transparency and glass theme. Settings owns
+/// the file; every key is optional and a parse error means the defaults.
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(default)]
 struct Desktop {
@@ -154,6 +156,9 @@ struct Appearance {
     theme_mode: String,
     accent: String,
     transparency: bool,
+    /// Black, Fog, Arctic, Midnight or Rose; see `crate::glass_tint`.
+    /// Empty (or anything unknown) is Black Glass.
+    glass_theme: String,
 }
 
 impl Default for Appearance {
@@ -162,6 +167,7 @@ impl Default for Appearance {
             theme_mode: "dark".into(),
             accent: DEFAULT_ACCENT.into(),
             transparency: true,
+            glass_theme: String::new(),
         }
     }
 }
@@ -180,17 +186,17 @@ impl Desktop {
     /// `sync_roostbar` writes them for this theme.
     fn palette(&self) -> [(&'static str, String); 4] {
         let a = &self.appearance;
-        let (bg, fg, muted) = if a.theme_mode == "light" {
-            ("#D9F2F2F7", "#1C1C22", "#5E5E72")
-        } else {
-            ("#D816161F", "#E8E8F0", "#ABABC2")
-        };
+        let (bg, fg, muted) = self.neutrals();
         let bg = if a.transparency {
             bg.to_string()
         } else {
             format!("#FF{}", &bg[3..])
         };
-        let accent = if is_hex(&a.accent) { a.accent.as_str() } else { DEFAULT_ACCENT };
+        let accent = if is_hex(&a.accent) {
+            a.accent.as_str()
+        } else {
+            DEFAULT_ACCENT
+        };
         [
             ("accent", accent.to_string()),
             ("background", bg),
@@ -198,6 +204,82 @@ impl Desktop {
             ("muted", muted.to_string()),
         ]
     }
+
+    /// Background, foreground and muted, as Raven Settings writes them for
+    /// Black Glass in this theme mode.
+    fn neutrals(&self) -> (&'static str, &'static str, &'static str) {
+        if self.appearance.theme_mode == "light" {
+            ("#D9F2F2F7", "#1C1C22", "#5E5E72")
+        } else {
+            ("#D816161F", "#E8E8F0", "#ABABC2")
+        }
+    }
+
+    /// Re-draw the stock background, foreground and muted in the glass
+    /// theme's ground and text (the compositor's, via `crate::glass_tint`),
+    /// keeping the background's alpha. Settings writes the Black Glass
+    /// values into the bar's config on every save, so a colour that is still
+    /// one of those is the desktop's to tint; one set by hand is left alone.
+    /// Black Glass changes nothing.
+    fn tint(&self, cfg: &mut Config) {
+        let css = crate::glass_tint::css(
+            &self.appearance.glass_theme,
+            self.appearance.theme_mode == "light",
+        );
+        let colour = |name: &str| {
+            let at = css.find(&format!("@define-color {name} #"))? + name.len() + 16;
+            rgb(css.get(at..at + 6)?)
+        };
+        let (Some(ground), Some(text)) = (colour("window_bg_color"), colour("window_fg_color"))
+        else {
+            return;
+        };
+        let (bg, fg, muted) = self.neutrals();
+        let (Some(bg0), Some(fg0)) = (rgb(&bg[3..]), rgb(&fg[1..])) else {
+            return;
+        };
+        // Where `c` sits between the stock ground and text, carried over to
+        // the theme's.
+        let tone = |c: [u8; 3]| {
+            let axis = |i: usize| f64::from(fg0[i]) - f64::from(bg0[i]);
+            let along: f64 = (0..3)
+                .map(|i| (f64::from(c[i]) - f64::from(bg0[i])) * axis(i))
+                .sum();
+            let length: f64 = (0..3).map(|i| axis(i) * axis(i)).sum();
+            let k = if length > 0.0 { along / length } else { 0.0 };
+            let m = |i: usize| {
+                let (a, b) = (f64::from(ground[i]), f64::from(text[i]));
+                (a + (b - a) * k).round().clamp(0.0, 255.0) as u8
+            };
+            format!("{:02X}{:02X}{:02X}", m(0), m(1), m(2))
+        };
+        let stock = |value: &str, stock: &str| {
+            value
+                .trim()
+                .trim_start_matches('#')
+                .eq_ignore_ascii_case(&stock[1..])
+        };
+        // The background matches whatever its alpha, which transparency sets.
+        let b = cfg.background.trim().trim_start_matches('#');
+        if b.len() == 8 && b.get(2..).is_some_and(|c| c.eq_ignore_ascii_case(&bg[3..])) {
+            cfg.background = format!("#{}{}", &b[..2], tone(bg0));
+        }
+        if stock(&cfg.foreground, fg) {
+            cfg.foreground = format!("#{}", tone(fg0));
+        }
+        if let (true, Some(m)) = (stock(&cfg.muted, muted), rgb(&muted[1..])) {
+            cfg.muted = format!("#{}", tone(m));
+        }
+    }
+}
+
+/// `RRGGBB` as bytes.
+fn rgb(hex: &str) -> Option<[u8; 3]> {
+    let at = |i: usize| {
+        hex.get(i..i + 2)
+            .and_then(|c| u8::from_str_radix(c, 16).ok())
+    };
+    Some([at(0)?, at(2)?, at(4)?])
 }
 
 fn is_hex(s: &str) -> bool {
@@ -220,7 +302,12 @@ pub fn parse_color(s: &str) -> [u8; 4] {
     let (a, r, g, b) = if hex.len() == 6 {
         (255u32, (v >> 16) & 0xff, (v >> 8) & 0xff, v & 0xff)
     } else {
-        ((v >> 24) & 0xff, (v >> 16) & 0xff, (v >> 8) & 0xff, v & 0xff)
+        (
+            (v >> 24) & 0xff,
+            (v >> 16) & 0xff,
+            (v >> 8) & 0xff,
+            v & 0xff,
+        )
     };
     [a as u8, r as u8, g as u8, b as u8]
 }
@@ -247,7 +334,8 @@ mod tests {
     #[test]
     fn the_file_wins_over_the_desktop() {
         let d = desktop("[appearance]\ntheme_mode = \"light\"\n");
-        let cfg = Config::from_text("accent = \"#22C5DD\"\nforeground = \"#FFFFFF\"\n", &d).unwrap();
+        let cfg =
+            Config::from_text("accent = \"#22C5DD\"\nforeground = \"#FFFFFF\"\n", &d).unwrap();
         assert_eq!(cfg.accent, "#22C5DD");
         assert_eq!(cfg.foreground, "#FFFFFF");
         assert_eq!(cfg.background, "#D9F2F2F7");
@@ -255,11 +343,41 @@ mod tests {
 
     #[test]
     fn auto_is_dark_and_opaque_without_transparency() {
-        let d = desktop("[appearance]\ntheme_mode = \"auto\"\naccent = \"red\"\ntransparency = false\n");
+        let d = desktop(
+            "[appearance]\ntheme_mode = \"auto\"\naccent = \"red\"\ntransparency = false\n",
+        );
         let cfg = Config::from_desktop(&d);
         assert_eq!(cfg.accent, DEFAULT_ACCENT);
         assert_eq!(cfg.background, "#FF16161F");
         assert_eq!(cfg.foreground, "#E8E8F0");
+    }
+
+    #[test]
+    fn the_glass_theme_tints_the_stock_colours_only() {
+        // Settings' Black Glass values, as it writes them into config.toml.
+        let file = "background = \"#D816161F\"\nforeground = \"#E8E8F0\"\nmuted = \"#ABABC2\"\n";
+        let black =
+            Config::from_text(file, &desktop("[appearance]\nglass_theme = \"black\"\n")).unwrap();
+        assert_eq!(
+            (
+                black.background.as_str(),
+                black.foreground.as_str(),
+                black.muted.as_str()
+            ),
+            ("#D816161F", "#E8E8F0", "#ABABC2")
+        );
+
+        // Rose: the compositor's rose ground at the same alpha, its text.
+        let rose = desktop("[appearance]\nglass_theme = \"rose\"\n");
+        let cfg = Config::from_text(file, &rose).unwrap();
+        assert_eq!(cfg.background, "#D85A3A4E");
+        assert_eq!(cfg.foreground, "#FFF4F8");
+        assert_ne!(cfg.muted, "#ABABC2");
+
+        // A colour set by hand stays the person's.
+        let cfg = Config::from_text("foreground = \"#FFFFFF\"\n", &rose).unwrap();
+        assert_eq!(cfg.foreground, "#FFFFFF");
+        assert_eq!(cfg.background, "#D85A3A4E");
     }
 
     #[test]

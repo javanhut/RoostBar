@@ -76,10 +76,10 @@ SESSION_D="${XDG_CONFIG_HOME:-$HOME/.config}/raven/session.d"
 mkdir -p "$SESSION_D"
 install -m755 contrib/session.d/50-roostbar "$SESSION_D/50-roostbar"
 
-if ! pgrep -x roostbar >/dev/null 2>&1; then
-    setsid "$HOME/.local/bin/roostbar" </dev/null >/dev/null 2>&1 &
-    echo "started roostbar"
-fi
+# --replace takes over from the bar already running (see src/single.rs), so
+# the build just installed is the one on screen, and there is never a second.
+setsid "$HOME/.local/bin/roostbar" --replace </dev/null >/dev/null 2>&1 &
+echo "started roostbar"
 
 cat <<MSG
 
