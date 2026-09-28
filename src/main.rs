@@ -1,7 +1,6 @@
 mod audio;
 mod bluetooth;
 mod config;
-mod glass_tint;
 mod notifications;
 #[cfg(feature = "pipewire-native")]
 mod pipewire_audio;

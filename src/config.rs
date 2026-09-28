@@ -156,7 +156,8 @@ struct Appearance {
     theme_mode: String,
     accent: String,
     transparency: bool,
-    /// Black, Fog, Arctic, Midnight or Rose; see `crate::glass_tint`.
+    /// Black, Fog, Arctic, Midnight, Rose, Tokyo Neon, Clear, Ember or
+    /// Nebula; see `raven_glass::tint`.
     /// Empty (or anything unknown) is Black Glass.
     glass_theme: String,
 }
@@ -216,13 +217,13 @@ impl Desktop {
     }
 
     /// Re-draw the stock background, foreground and muted in the glass
-    /// theme's ground and text (the compositor's, via `crate::glass_tint`),
+    /// theme's ground and text (the compositor's, via `raven_glass::tint`),
     /// keeping the background's alpha. Settings writes the Black Glass
     /// values into the bar's config on every save, so a colour that is still
     /// one of those is the desktop's to tint; one set by hand is left alone.
     /// Black Glass changes nothing.
     fn tint(&self, cfg: &mut Config) {
-        let css = crate::glass_tint::css(
+        let css = raven_glass::tint::css(
             &self.appearance.glass_theme,
             self.appearance.theme_mode == "light",
         );
